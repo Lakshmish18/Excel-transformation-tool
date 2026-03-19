@@ -77,7 +77,7 @@ async def get_ai_suggestions(columns: List[str], rows: List[Dict[str, Any]]) -> 
             
             # Edyx API Payload Format
             payload = {
-                "model": "convo",
+                "model": "situation-aware",
                 "messages": [
                     { "role": "system", "content": "You are a data expert that only returns JSON." },
                     { "role": "user", "content": prompt }
