@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 import pandas as pd
 import numpy as np
+from app.utils.ai_service import get_ai_suggestions
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -31,11 +32,26 @@ class VisualizationSuggestion(BaseModel):
     """Suggested visualization configuration."""
     type: str  # "bar", "line", "scatter", "histogram", "pie"
     title: str
+    description: Optional[str] = None
     x: Optional[str] = None
     y: Optional[str] = None
     category: Optional[str] = None
     value: Optional[str] = None
     column: Optional[str] = None
+
+
+class OperationSuggestion(BaseModel):
+    """Suggested data transformation operation."""
+    type: str
+    reason: str
+    params: Dict[str, Any]
+
+
+class AISuggestionsResponse(BaseModel):
+    """Response model for AI suggestions."""
+    insights: List[Insight]
+    operation_suggestions: List[OperationSuggestion]
+    visualization_suggestions: List[VisualizationSuggestion]
 
 
 class AnalysisSummary(BaseModel):
@@ -286,4 +302,36 @@ async def analyze_data(request: AnalyzeDataRequest) -> AnalyzeDataResponse:
         raise HTTPException(
             status_code=500,
             detail=f"Failed to analyze data: {str(e)}"
+        )
+
+
+@router.post("/ai-suggestions", response_model=AISuggestionsResponse)
+async def ai_suggestions(request: AnalyzeDataRequest) -> AISuggestionsResponse:
+    """
+    Get AI-powered suggestions for data transformations and visualizations.
+    """
+    try:
+        if not request.rows:
+            raise HTTPException(
+                status_code=400,
+                detail="No data rows provided"
+            )
+        
+        suggestions = await get_ai_suggestions(request.columns, request.rows)
+        
+        # Format the response to match AISuggestionsResponse model
+        return AISuggestionsResponse(
+            insights=[Insight(type="analysis", **i) for i in suggestions.get("insights", [])],
+            operation_suggestions=[OperationSuggestion(**s) for s in suggestions.get("operation_suggestions", [])],
+            visualization_suggestions=[VisualizationSuggestion(**v) for v in suggestions.get("visualization_suggestions", [])]
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting AI suggestions: {e}", exc_info=True)
+        # Return empty suggestions on error instead of failing completely
+        return AISuggestionsResponse(
+            insights=[Insight(type="quality", title="AI Analysis Error", description=str(e), severity="error")],
+            operation_suggestions=[],
+            visualization_suggestions=[]
         )

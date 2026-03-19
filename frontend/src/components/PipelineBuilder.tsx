@@ -9,10 +9,11 @@ import {
   TooltipProvider,
 } from '@/components/ui/tooltip'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { AISuggestions } from '@/components/AISuggestions'
 import {
   Plus, CheckCircle2, XCircle, Loader2, Play, ShieldCheck, ArrowUp, ArrowDown, Edit, Trash2,
   Undo2, Redo2, History, BookmarkPlus, FolderOpen, Download, Upload, MoreHorizontal,
-  AlertTriangle,
+  AlertTriangle, Sparkles,
 } from 'lucide-react'
 import { HelpTooltip } from '@/components/HelpTooltip'
 import {
@@ -107,6 +108,8 @@ export function PipelineBuilder({
   const [historyDialogOpen, setHistoryDialogOpen] = useState(false)
   const [draftRestoreOpen, setDraftRestoreOpen] = useState(false)
   const [clearConfirmOpen, setClearConfirmOpen] = useState(false)
+  const [showAISuggestions, setShowAISuggestions] = useState(false)
+  const [sampleData, setSampleData] = useState<Record<string, any>[]>([])
   const [importFileRef, setImportFileRef] = useState<HTMLInputElement | null>(null)
   const initialLoadDone = useRef(false)
   const draftChecked = useRef(false)
@@ -279,6 +282,15 @@ export function PipelineBuilder({
     setConfigMode('edit')
     setConfigDialogOpen(true)
   }
+
+  // Fetch sample data for AI suggestions
+  useEffect(() => {
+    if (fileId && sheetName) {
+      excelApi.previewSheet(fileId, sheetName, 10)
+        .then((res) => setSampleData(res.rows || []))
+        .catch(() => setSampleData([]))
+    }
+  }, [fileId, sheetName])
 
   // Sync present to parent
   useEffect(() => {
@@ -534,8 +546,9 @@ export function PipelineBuilder({
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className={cn("grid gap-6", showAISuggestions ? "grid-cols-1 lg:grid-cols-3" : "grid-cols-1")}>
+            <div className={cn("space-y-4", showAISuggestions ? "lg:col-span-2" : "")}>
+              <div className="flex flex-wrap items-center justify-between gap-2">
               <h3 className="text-lg font-semibold">
                 Current Pipeline ({operations.length})
                 {(isValidating || isRunning) && (
@@ -625,6 +638,16 @@ export function PipelineBuilder({
                     title="Save pipeline (Ctrl+S)"
                   >
                     <BookmarkPlus className="h-4 w-4" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => setShowAISuggestions(!showAISuggestions)}
+                    className={cn("text-muted-foreground", showAISuggestions && "text-primary bg-primary/10")}
+                    aria-label="AI Suggestions"
+                    title="AI Suggestions"
+                  >
+                    <Sparkles className="h-4 w-4" />
                   </Button>
                   <Popover>
                     <PopoverTrigger asChild>
@@ -927,6 +950,23 @@ export function PipelineBuilder({
                 )}
               </div>
             </div>
+
+            {showAISuggestions && (
+              <div className="lg:col-span-1 h-full">
+                <AISuggestions 
+                  columns={columns} 
+                  rows={sampleData} 
+                  onApplyOperation={(op) => {
+                     handleConfigSave(op)
+                     toast.success(`Applied AI suggestion: ${getOperationLabel(op.type)}`)
+                   }}
+                  onApplyVisualization={(viz) => {
+                    toast.info(`AI suggested a ${viz.type} chart: ${viz.title}. You can create this in the AutoCharts section.`)
+                  }}
+                />
+              </div>
+            )}
+          </div>
         </CardContent>
       </Card>
 

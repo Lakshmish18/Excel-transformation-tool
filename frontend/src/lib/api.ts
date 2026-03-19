@@ -210,11 +210,24 @@ export interface Insight {
 export interface VisualizationSuggestion {
   type: 'bar' | 'line' | 'scatter' | 'histogram' | 'pie'
   title: string
+  description?: string
   x?: string
   y?: string
   category?: string
   value?: string
   column?: string
+}
+
+export interface OperationSuggestion {
+  type: Operation['type']
+  reason: string
+  params: Record<string, any>
+}
+
+export interface AISuggestionsResponse {
+  insights: Insight[]
+  operation_suggestions: OperationSuggestion[]
+  visualization_suggestions: VisualizationSuggestion[]
 }
 
 export interface AnalysisSummary {
@@ -384,6 +397,14 @@ export const excelApi = {
    */
   analyzeData: async (request: AnalyzeDataRequest): Promise<AnalyzeDataResponse> => {
     const response = await api.post<AnalyzeDataResponse>('/analyze-data', request)
+    return response.data
+  },
+
+  /**
+   * Get AI-powered suggestions for transformations and visualizations
+   */
+  getAISuggestions: async (request: AnalyzeDataRequest): Promise<AISuggestionsResponse> => {
+    const response = await api.post<AISuggestionsResponse>('/ai-suggestions', request)
     return response.data
   },
 }
