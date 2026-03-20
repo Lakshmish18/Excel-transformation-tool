@@ -1,9 +1,12 @@
 """
 Transformation preview endpoint.
 """
+import hashlib
+import json
 import logging
+import time
 from typing import List, Optional, Literal, Dict, Any
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 import pandas as pd
@@ -13,11 +16,71 @@ import openpyxl
 
 from app.models.operations import Operation
 from app.transform_engine import apply_operations, ColumnNotFoundError, OperationValidationError, validate_operations
+from app.limiter import limiter
 from app.api.v1.excel import file_storage, OUTPUT_DIR, _get_file_info
-from app.utils.excel_loader import load_excel_with_header_detection
+from app.utils.excel_loader import load_file_with_header_detection
+from app.utils.excel_export import export_styled_excel
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+# Cache for transformation results (key -> (response_dict, expiry_ts))
+TRANSFORM_CACHE: Dict[str, tuple] = {}
+CACHE_TTL_SECONDS = 3600  # 1 hour
+
+
+def _safe_json_value(obj: Any) -> Any:
+    """Convert value to JSON-serializable form."""
+    if obj is None:
+        return None
+    if isinstance(obj, (bool, int, float, str)):
+        return obj
+    if hasattr(obj, "item"):  # numpy scalar (int64, float64, bool_, etc.)
+        try:
+            return obj.item()
+        except (ValueError, AttributeError):
+            return str(obj)
+    if isinstance(obj, (pd.Timestamp, pd.Timedelta)):
+        return str(obj)
+    if isinstance(obj, dict):
+        return {str(k): _safe_json_value(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_safe_json_value(v) for v in obj]
+    if hasattr(pd, "isna") and callable(pd.isna) and pd.isna(obj):
+        return None
+    return str(obj)
+
+
+def _rows_to_json_safe(df: pd.DataFrame, limit: int = 30) -> List[dict]:
+    """Convert DataFrame rows to JSON-serializable list of dicts."""
+    df_preview = df.head(limit)
+    rows = []
+    for _, series in df_preview.iterrows():
+        row = {}
+        for col in df_preview.columns:
+            try:
+                val = series[col]
+                row[str(col)] = _safe_json_value(val)
+            except Exception as e:
+                logger.warning(f"Could not serialize cell {col}: {e}")
+                row[str(col)] = str(val) if val is not None else ""
+        rows.append(row)
+    return rows
+
+
+def generate_cache_key(file_id: str, sheet_name: str, operations: list) -> str:
+    """Generate unique cache key for file + sheet + operations."""
+    try:
+        ops_list = [
+            {"type": getattr(o, "type", str(o)), "params": _safe_json_value(getattr(o, "params", {}))}
+            for o in operations
+        ]
+        ops_json = json.dumps(ops_list, sort_keys=True, default=str)
+    except (TypeError, ValueError) as e:
+        logger.warning(f"Cache key fallback due to serialization: {e}")
+        ops_json = str(operations)
+    raw = f"{file_id}:{sheet_name}:{ops_json}"
+    return hashlib.md5(raw.encode()).hexdigest()
 
 
 class TransformRequest(BaseModel):
@@ -85,7 +148,8 @@ class ValidatePipelineResponse(BaseModel):
 
 
 @router.post("/validate-pipeline")
-async def validate_pipeline(request: ValidatePipelineRequest) -> ValidatePipelineResponse:
+@limiter.limit("30/minute")
+async def validate_pipeline(request: Request, payload: ValidatePipelineRequest) -> ValidatePipelineResponse:
     """
     Validate a transformation pipeline without applying it.
     
@@ -97,31 +161,31 @@ async def validate_pipeline(request: ValidatePipelineRequest) -> ValidatePipelin
     """
     # Get file info (checks both memory and disk)
     try:
-        file_info = _get_file_info(request.fileId)
+        file_info = _get_file_info(payload.fileId)
     except HTTPException:
         raise
     
     file_path = Path(file_info["file_path"])
     
     # Validate sheet name
-    if request.sheetName not in file_info["sheets"]:
+    if payload.sheetName not in file_info["sheets"]:
         available_sheets = ", ".join(file_info["sheets"])
         raise HTTPException(
             status_code=400,
-            detail=f"Sheet '{request.sheetName}' not found. Available sheets: {available_sheets}"
+            detail=f"Sheet '{payload.sheetName}' not found. Available sheets: {available_sheets}"
         )
     
     try:
         # Load the DataFrame with header detection (just for validation)
-        df, _, _ = load_excel_with_header_detection(
+        df, _, _ = load_file_with_header_detection(
             file_path,
-            sheet_name=request.sheetName,
-            header_row_index=request.headerRowIndex,
+            sheet_name=payload.sheetName,
+            header_row_index=payload.headerRowIndex,
             nrows=1  # Only need structure, not all data
         )
         
         # Validate operations
-        validation_errors = validate_operations(df, request.operations)
+        validation_errors = validate_operations(df, payload.operations)
         
         # Convert to response format
         errors = [
@@ -146,40 +210,56 @@ async def validate_pipeline(request: ValidatePipelineRequest) -> ValidatePipelin
 
 
 @router.post("/preview-transform")
-async def preview_transform(request: TransformRequest) -> TransformResponse:
+@limiter.limit("30/minute")
+async def preview_transform(request: Request, payload: TransformRequest) -> TransformResponse:
     """
     Preview transformation by applying operations to a sheet.
-    
+    Results are cached for repeated requests with same file/sheet/operations.
+
     Args:
         request: TransformRequest with fileId, sheetName, operations, and optional headerRowIndex
-    
+
     Returns:
         TransformResponse with transformed preview data and metadata
     """
+    cache_key = generate_cache_key(
+        payload.fileId, payload.sheetName, payload.operations
+    )
+    now = time.time()
+    if cache_key in TRANSFORM_CACHE:
+        cached, expiry = TRANSFORM_CACHE[cache_key]
+        if now < expiry:
+            try:
+                logger.debug(f"Transform cache hit: {cache_key[:8]}...")
+                return TransformResponse(**cached)
+            except Exception as e:
+                logger.warning(f"Cache entry invalid, recomputing: {e}")
+                del TRANSFORM_CACHE[cache_key]
+
     # Get file info (checks both memory and disk)
     try:
-        file_info = _get_file_info(request.fileId)
+        file_info = _get_file_info(payload.fileId)
     except HTTPException:
         raise
     
     file_path = Path(file_info["file_path"])
     
     # Validate sheet name
-    if request.sheetName not in file_info["sheets"]:
+    if payload.sheetName not in file_info["sheets"]:
         available_sheets = ", ".join(file_info["sheets"])
         raise HTTPException(
             status_code=400,
-            detail=f"Sheet '{request.sheetName}' not found. Available sheets: {available_sheets}"
+            detail=f"Sheet '{payload.sheetName}' not found. Available sheets: {available_sheets}"
         )
     
     try:
         # Load limited rows for preview (much faster for large files)
         # We'll load more rows than we need to ensure operations work correctly
         PREVIEW_LIMIT = 50  # Load 50 rows for preview, show first 30
-        df_original, detected_header_row, warning = load_excel_with_header_detection(
+        df_original, detected_header_row, warning = load_file_with_header_detection(
             file_path,
-            sheet_name=request.sheetName,
-            header_row_index=request.headerRowIndex,
+            sheet_name=payload.sheetName,
+            header_row_index=payload.headerRowIndex,
             nrows=PREVIEW_LIMIT  # Limit rows for performance
         )
         row_count_before = len(df_original)
@@ -188,12 +268,12 @@ async def preview_transform(request: TransformRequest) -> TransformResponse:
         original_columns = set(df_original.columns)
         
         # Log operations being applied
-        logger.info(f"Applying {len(request.operations)} operations to preview data")
-        for i, op in enumerate(request.operations):
+        logger.info(f"Applying {len(payload.operations)} operations to preview data")
+        for i, op in enumerate(payload.operations):
             logger.info(f"Operation {i+1}: type={op.type}, params={op.params}")
         
         # Apply all operations at once (much faster)
-        df_transformed = apply_operations(df_original, request.operations)
+        df_transformed = apply_operations(df_original, payload.operations)
         
         # Log transformation results
         logger.info(f"Transformation complete. Rows: {len(df_original)} -> {len(df_transformed)}")
@@ -203,11 +283,11 @@ async def preview_transform(request: TransformRequest) -> TransformResponse:
         all_changes = []
         
         # Only track changes if we have operations and preview data
-        if request.operations and len(df_original) > 0:
+        if payload.operations and len(df_original) > 0:
             # Create a working copy for change tracking
             df_tracking = df_original.head(PREVIEW_LIMIT).copy()
             
-            for i, operation in enumerate(request.operations):
+            for i, operation in enumerate(payload.operations):
                 df_before_track = df_tracking.copy()
                 
                 # Apply single operation to tracking copy
@@ -332,23 +412,13 @@ async def preview_transform(request: TransformRequest) -> TransformResponse:
         # Get new columns (columns that weren't in the original)
         new_columns = [col for col in df_transformed.columns if col not in original_columns]
         
-        # Get preview (first 30 rows for faster rendering)
-        df_preview = df_transformed.head(30)
-        
-        # Convert to JSON-serializable format
-        # Use default=str to ensure all values are JSON-serializable
-        rows = df_preview.fillna("").to_dict(orient='records')
-        # Ensure numeric values are properly converted (not numpy types)
+        # Convert to JSON-serializable format (handles numpy, pd.Timestamp, etc.)
+        rows = _rows_to_json_safe(df_transformed, limit=30)
+        # Normalize None to empty string for display
         for row in rows:
-            for key, value in row.items():
-                if pd.isna(value) or value == "":
-                    row[key] = ""
-                elif isinstance(value, (pd.Timestamp, pd.Timedelta)):
-                    row[key] = str(value)
-                elif hasattr(value, 'item'):  # numpy scalar
-                    row[key] = value.item() if hasattr(value, 'item') else value
-                else:
-                    row[key] = value
+            for k, v in list(row.items()):
+                if v is None:
+                    row[k] = ""
         
         columns = [str(col) for col in df_transformed.columns]
         
@@ -357,8 +427,8 @@ async def preview_transform(request: TransformRequest) -> TransformResponse:
             logger.info(f"Sample transformed row (first row): {rows[0]}")
         
         response = TransformResponse(
-            fileId=request.fileId,
-            sheetName=request.sheetName,
+            fileId=payload.fileId,
+            sheetName=payload.sheetName,
             columns=columns,
             rows=rows,
             rowCountBefore=row_count_before,
@@ -368,6 +438,9 @@ async def preview_transform(request: TransformRequest) -> TransformResponse:
             warning=warning,
             changes=all_changes,
         )
+        # Cache result
+        cache_entry = response.model_dump()
+        TRANSFORM_CACHE[cache_key] = (cache_entry, now + CACHE_TTL_SECONDS)
         return response
     except OperationValidationError as e:
         # Return structured error for operation validation failure
@@ -415,9 +488,11 @@ async def preview_transform(request: TransformRequest) -> TransformResponse:
             detail=f"Transformation error: {error_str}"
         )
     except Exception as e:
+        err_msg = str(e).strip() or repr(e)
+        logger.exception("Unexpected error in preview_transform: %s", err_msg)
         raise HTTPException(
             status_code=500,
-            detail=f"Error processing transformation: {str(e)}"
+            detail=f"Error processing transformation: {err_msg}"
         )
 
 
@@ -450,7 +525,7 @@ async def export_transform(request: TransformRequest) -> FileResponse:
     
     try:
         # Load the full DataFrame with header detection
-        df_original, detected_header_row, warning = load_excel_with_header_detection(
+        df_original, detected_header_row, warning = load_file_with_header_detection(
             file_path,
             sheet_name=request.sheetName,
             header_row_index=request.headerRowIndex
@@ -463,9 +538,9 @@ async def export_transform(request: TransformRequest) -> FileResponse:
         output_id = str(uuid.uuid4())
         output_filename = f"transformed_{output_id}.xlsx"
         output_path = OUTPUT_DIR / output_filename
-        
-        # Write to Excel
-        df_transformed.to_excel(output_path, index=False, engine='openpyxl')
+
+        # Write to Excel with professional styling
+        export_styled_excel(df_transformed, output_path)
         
         # Return file for download
         return FileResponse(
@@ -533,12 +608,14 @@ class BatchTransformRequest(BaseModel):
 class BatchTransformResponse(BaseModel):
     """Response model for batch transformation."""
     results: List[Dict[str, Any]]  # List of {fileId, fileName, rowCountBefore, rowCountAfter}
-    zipUrl: Optional[str] = None  # URL to download ZIP if outputFormat is "zip"
+    zipUrl: Optional[str] = None  # Backwards-compatible URL to download ZIP if outputFormat is "zip"
+    zipId: Optional[str] = None  # Identifier for ZIP file; preferred for new clients
     errors: Optional[List[Dict[str, Any]]] = None  # Per-file errors when partial failure
 
 
 @router.post("/batch-transform")
-async def batch_transform(request: BatchTransformRequest) -> BatchTransformResponse:
+@limiter.limit("5/minute")
+async def batch_transform(request: Request, payload: BatchTransformRequest) -> BatchTransformResponse:
     """
     Apply the same transformation pipeline to multiple files.
     
@@ -548,7 +625,7 @@ async def batch_transform(request: BatchTransformRequest) -> BatchTransformRespo
     Returns:
         BatchTransformResponse with results for each file
     """
-    if not request.fileIds or len(request.fileIds) == 0:
+    if not payload.fileIds or len(payload.fileIds) == 0:
         raise HTTPException(
             status_code=400,
             detail="At least one file ID is required"
@@ -557,34 +634,34 @@ async def batch_transform(request: BatchTransformRequest) -> BatchTransformRespo
     results = []
     errors = []
     
-    for file_id in request.fileIds:
+    for file_id in payload.fileIds:
         try:
             # Get file info
             file_info = _get_file_info(file_id)
             file_path = Path(file_info["file_path"])
             
             # Validate sheet exists
-            if request.sheetName not in file_info["sheets"]:
+            if payload.sheetName not in file_info["sheets"]:
                 errors.append({
                     "fileId": file_id,
                     "fileName": file_info["filename"],
-                    "error": f"Sheet '{request.sheetName}' not found"
+                    "error": f"Sheet '{payload.sheetName}' not found"
                 })
                 continue
             
             # Load and transform
-            df_original, _, _ = load_excel_with_header_detection(
+            df_original, _, _ = load_file_with_header_detection(
                 file_path,
-                sheet_name=request.sheetName,
-                header_row_index=request.headerRowIndex
+                sheet_name=payload.sheetName,
+                header_row_index=payload.headerRowIndex
             )
             row_count_before = len(df_original)
             
             # Apply transformations
-            df_transformed = apply_operations(df_original, request.operations)
+            df_transformed = apply_operations(df_original, payload.operations)
             row_count_after = len(df_transformed)
             
-            if request.outputFormat == "individual":
+            if payload.outputFormat == "individual":
                 # Save each transformed file
                 output_id = str(uuid.uuid4())
                 output_filename = f"transformed_{output_id}.xlsx"
@@ -620,7 +697,8 @@ async def batch_transform(request: BatchTransformRequest) -> BatchTransformRespo
     
     # If ZIP format, create ZIP file
     zip_url = None
-    if request.outputFormat == "zip" and results:
+    zip_id: Optional[str] = None
+    if payload.outputFormat == "zip" and results:
         try:
             import zipfile
             import tempfile
@@ -641,7 +719,8 @@ async def batch_transform(request: BatchTransformRequest) -> BatchTransformRespo
                         # Clean up temp file
                         temp_file.unlink()
             
-            zip_url = f"/api/v1/download-batch-zip?zipId={zip_id}"
+            # Store relative API path so clients using axios baseURL can resolve correctly.
+            zip_url = f"/download-batch-zip?zipId={zip_id}"
             
         except Exception as e:
             logger.error(f"Error creating ZIP file: {e}")
@@ -652,7 +731,8 @@ async def batch_transform(request: BatchTransformRequest) -> BatchTransformRespo
     
     response = BatchTransformResponse(
         results=[{k: v for k, v in r.items() if k != "dataFrame"} for r in results],
-        zipUrl=zip_url
+        zipUrl=zip_url,
+        zipId=zip_id,
     )
     
     if errors:

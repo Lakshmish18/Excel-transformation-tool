@@ -4,10 +4,8 @@
  */
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 
-// @ts-ignore - Vite environment variables
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || ''
-// @ts-ignore - Vite environment variables
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || ''
+const supabaseUrl = (import.meta.env.VITE_SUPABASE_URL as string) || ''
+const supabaseAnonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY as string) || ''
 
 if (!supabaseUrl || !supabaseAnonKey) {
   console.warn(
@@ -38,7 +36,7 @@ export interface SavedPipeline {
   user_id: string
   name: string
   description?: string
-  operations: any[]
+  operations: import('@/lib/api').Operation[]
   created_at: string
   updated_at: string
 }
@@ -50,7 +48,7 @@ export interface TransformationHistory {
   original_file_url?: string
   transformed_file_url?: string
   pipeline_id?: string
-  operations: any[]
+  operations: import('@/lib/api').Operation[]
   row_count_before?: number
   row_count_after?: number
   status: 'success' | 'failed'

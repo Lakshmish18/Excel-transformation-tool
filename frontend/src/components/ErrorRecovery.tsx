@@ -141,7 +141,7 @@ export function getFriendlyError(error: unknown): { title: string; message: stri
   if (lower.includes('xlsx') || lower.includes('file type') || lower.includes('invalid file')) {
     return {
       title: 'Invalid file type',
-      message: 'Please upload an Excel file (.xlsx format only).',
+      message: 'Please upload an Excel (.xlsx) or CSV (.csv) file.',
     }
   }
 

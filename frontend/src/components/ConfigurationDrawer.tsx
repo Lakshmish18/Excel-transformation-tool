@@ -10,7 +10,7 @@ interface ConfigurationDrawerProps {
   fileId: string
   sheetName: string
   columns: string[]
-  onApply: (operation: any) => void
+  onApply: (operation: import('@/lib/api').Operation) => void
   onCancel: () => void
   onOperationTypeSelect?: (operationType: string) => void
 }

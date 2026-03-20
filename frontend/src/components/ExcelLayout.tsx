@@ -13,7 +13,7 @@ import {
   SelectValue,
 } from './ui/select'
 import { Loader2, Eye, FileSpreadsheet, Download, Play } from 'lucide-react'
-import { excelApi, type PreviewResponse, type TransformResponse, type Operation, type CellChange } from '@/lib/api'
+import { excelApi, getApiErrorDetail, type PreviewResponse, type TransformResponse, type Operation, type CellChange } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
 interface ExcelLayoutProps {
@@ -50,17 +50,8 @@ export function ExcelLayout({ fileId, fileName, sheets }: ExcelLayoutProps) {
     try {
       const response = await excelApi.previewSheet(fileId, selectedSheet, 30)
       setPreviewData(response)
-    } catch (err: any) {
-      const errorDetail = err.response?.data?.detail
-      if (errorDetail && typeof errorDetail === 'object' && errorDetail.error_type === 'COLUMN_NOT_FOUND') {
-        const columnName = errorDetail.column_name || 'unknown'
-        const availableCols = errorDetail.available_columns || []
-        setError(
-          `Column '${columnName}' not found. Available: ${availableCols.join(', ')}`
-        )
-      } else {
-        setError(errorDetail || err.message || 'Failed to load preview')
-      }
+    } catch (err: unknown) {
+      setError(getApiErrorDetail(err))
     } finally {
       setIsLoading(false)
     }
@@ -131,25 +122,8 @@ export function ExcelLayout({ fileId, fileName, sheets }: ExcelLayoutProps) {
         rows: response.rows,
       })
       enterReviewMode()
-    } catch (err: any) {
-      const errorDetail = err.response?.data?.detail
-      if (errorDetail && typeof errorDetail === 'object') {
-        if (errorDetail.error_type === 'COLUMN_NOT_FOUND') {
-          const columnName = errorDetail.column_name || 'unknown'
-          const availableCols = errorDetail.available_columns || []
-          setError(
-            `Column '${columnName}' not found. Available: ${availableCols.join(', ')}`
-          )
-        } else if (errorDetail.error_type === 'OPERATION_VALIDATION_ERROR') {
-          setError(
-            `Operation ${errorDetail.operation_index + 1} (${errorDetail.operation_type}): ${errorDetail.message}`
-          )
-        } else {
-          setError(errorDetail.message || errorDetail.detail || 'Transformation failed')
-        }
-      } else {
-        setError(errorDetail || err.message || 'Transformation failed')
-      }
+    } catch (err: unknown) {
+      setError(getApiErrorDetail(err))
     } finally {
       setIsRunning(false)
     }
@@ -175,8 +149,8 @@ export function ExcelLayout({ fileId, fileName, sheets }: ExcelLayoutProps) {
       a.click()
       window.URL.revokeObjectURL(url)
       document.body.removeChild(a)
-    } catch (err: any) {
-      setError(err.response?.data?.detail || err.message || 'Download failed')
+    } catch (err: unknown) {
+      setError(getApiErrorDetail(err))
     }
   }
 

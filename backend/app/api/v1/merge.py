@@ -2,15 +2,16 @@
 File merge and join endpoints.
 """
 from typing import Dict, Any, List, Optional, Literal
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 import pandas as pd
 from pathlib import Path
 import uuid
 import openpyxl
 
+from app.limiter import limiter
 from app.api.v1.excel import file_storage, UPLOAD_DIR, _get_file_info
-from app.utils.excel_loader import load_excel_with_header_detection
+from app.utils.excel_loader import load_file_with_header_detection
 import logging
 
 logger = logging.getLogger(__name__)
@@ -38,23 +39,24 @@ class MergeFilesResponse(BaseModel):
 
 
 @router.post("/merge-files")
-async def merge_files(request: MergeFilesRequest) -> MergeFilesResponse:
+@limiter.limit("20/minute")
+async def merge_files(request: Request, payload: MergeFilesRequest) -> MergeFilesResponse:
     """
     Merge multiple Excel files into one.
     
     Args:
-        request: MergeFilesRequest with fileIds, strategy, and optional joinColumn
+        payload: MergeFilesRequest with fileIds, strategy, and optional joinColumn
     
     Returns:
         MergeFilesResponse with merged file information
     """
-    if not request.fileIds or len(request.fileIds) < 2:
+    if not payload.fileIds or len(payload.fileIds) < 2:
         raise HTTPException(
             status_code=400,
             detail="At least 2 files are required for merging"
         )
     
-    if request.strategy == "join" and not request.joinColumn:
+    if payload.strategy == "join" and not payload.joinColumn:
         raise HTTPException(
             status_code=400,
             detail="joinColumn is required for 'join' strategy"
@@ -62,7 +64,7 @@ async def merge_files(request: MergeFilesRequest) -> MergeFilesResponse:
     
     # Get file info for all files
     file_infos = []
-    for file_id in request.fileIds:
+    for file_id in payload.fileIds:
         try:
             file_info = _get_file_info(file_id)
             file_infos.append(file_info)
@@ -84,15 +86,15 @@ async def merge_files(request: MergeFilesRequest) -> MergeFilesResponse:
             sheet_name = file_info["sheets"][0]
             all_sheets.add(sheet_name)
             
-            df, _, _ = load_excel_with_header_detection(
+            df, _, _ = load_file_with_header_detection(
                 file_path,
                 sheet_name=sheet_name,
-                header_row_index=request.headerRowIndex
+                header_row_index=payload.headerRowIndex
             )
             dataframes.append(df)
         
         # Merge based on strategy
-        if request.strategy == "append":
+        if payload.strategy == "append":
             # Stack DataFrames vertically (must have same columns)
             # Align columns first
             all_columns = set()
@@ -108,7 +110,7 @@ async def merge_files(request: MergeFilesRequest) -> MergeFilesResponse:
             merged_df = pd.concat(aligned_dfs, ignore_index=True)
             warning = None
             
-        elif request.strategy == "join":
+        elif payload.strategy == "join":
             # SQL-like join on a column
             if len(dataframes) != 2:
                 raise HTTPException(
@@ -119,26 +121,26 @@ async def merge_files(request: MergeFilesRequest) -> MergeFilesResponse:
             df1, df2 = dataframes[0], dataframes[1]
             
             # Validate join column exists in both
-            if request.joinColumn not in df1.columns:
+            if payload.joinColumn not in df1.columns:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Join column '{request.joinColumn}' not found in first file"
+                    detail=f"Join column '{payload.joinColumn}' not found in first file"
                 )
-            if request.joinColumn not in df2.columns:
+            if payload.joinColumn not in df2.columns:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Join column '{request.joinColumn}' not found in second file"
+                    detail=f"Join column '{payload.joinColumn}' not found in second file"
                 )
             
             # Perform join
-            if request.joinType == "inner":
-                merged_df = pd.merge(df1, df2, on=request.joinColumn, how="inner")
-            elif request.joinType == "left":
-                merged_df = pd.merge(df1, df2, on=request.joinColumn, how="left")
-            elif request.joinType == "right":
-                merged_df = pd.merge(df1, df2, on=request.joinColumn, how="right")
+            if payload.joinType == "inner":
+                merged_df = pd.merge(df1, df2, on=payload.joinColumn, how="inner")
+            elif payload.joinType == "left":
+                merged_df = pd.merge(df1, df2, on=payload.joinColumn, how="left")
+            elif payload.joinType == "right":
+                merged_df = pd.merge(df1, df2, on=payload.joinColumn, how="right")
             else:  # outer
-                merged_df = pd.merge(df1, df2, on=request.joinColumn, how="outer")
+                merged_df = pd.merge(df1, df2, on=payload.joinColumn, how="outer")
             
             warning = None
             
@@ -172,14 +174,14 @@ async def merge_files(request: MergeFilesRequest) -> MergeFilesResponse:
         # Store merged file metadata
         file_storage[merged_file_id] = {
             "file_id": merged_file_id,
-            "filename": f"merged_{len(request.fileIds)}_files.xlsx",
+            "filename": f"merged_{len(payload.fileIds)}_files.xlsx",
             "file_path": str(merged_file_path),
             "sheets": sheet_names,
         }
         
         return MergeFilesResponse(
             mergedFileId=merged_file_id,
-            fileName=f"merged_{len(request.fileIds)}_files.xlsx",
+            fileName=f"merged_{len(payload.fileIds)}_files.xlsx",
             sheets=sheet_names,
             rowCount=len(merged_df),
             columnCount=len(merged_df.columns),

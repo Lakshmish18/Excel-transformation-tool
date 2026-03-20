@@ -11,7 +11,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Loader2, Zap } from 'lucide-react'
-import { excelApi, type TransformResponse } from '@/lib/api'
+import { excelApi, getApiErrorDetail, type TransformResponse } from '@/lib/api'
 
 interface OperationsSectionProps {
   fileId: string
@@ -63,7 +63,7 @@ export function OperationsSection({
 
     try {
       // Build operation based on type
-      let operation: any = { type: operationType, params: {} }
+      const operation: import('@/lib/api').Operation = { type: operationType as import('@/lib/api').Operation['type'], params: {} }
 
       if (operationType === 'filter') {
         if (!filterColumn || !filterOperator || filterValue === '') {
@@ -110,25 +110,8 @@ export function OperationsSection({
       // Call transform API
       const response = await excelApi.previewTransform(fileId, sheetName, [operation])
       onTransformSuccess(response)
-    } catch (err: any) {
-      if (onError) {
-        const errorDetail = err.response?.data?.detail
-        // Handle structured error responses
-        if (errorDetail && typeof errorDetail === 'object') {
-          if (errorDetail.error_type === 'COLUMN_NOT_FOUND') {
-            const columnName = errorDetail.column_name || 'unknown'
-            const availableCols = errorDetail.available_columns || []
-            onError(
-              `The column '${columnName}' was not found in this sheet. ` +
-              `Available columns are: ${availableCols.join(', ')}`
-            )
-          } else {
-            onError(errorDetail.message || errorDetail.detail || 'Transformation failed')
-          }
-        } else {
-          onError(errorDetail || err.message || 'Transformation failed')
-        }
-      }
+    } catch (err: unknown) {
+      onError?.(getApiErrorDetail(err))
     } finally {
       setIsLoading(false)
     }

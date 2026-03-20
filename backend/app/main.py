@@ -7,11 +7,20 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from dotenv import load_dotenv
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 
-from app.api.v1 import health, excel, transform, merge, analyze
+from app.limiter import limiter
+from app.api.v1 import health, excel, transform, merge, analyze, ai
 from app.utils.file_cleanup import cleanup_outputs_dir, DEFAULT_MAX_AGE_SECONDS
+
+# Load environment variables from `backend/.env` (if present).
+# This must happen before we read any `os.getenv(...)` values.
+load_dotenv()
 
 # Configure logging
 logging.basicConfig(
@@ -28,18 +37,29 @@ uploads_dir.mkdir(exist_ok=True)
 outputs_dir = Path("outputs")
 outputs_dir.mkdir(exist_ok=True)
 
-# Run outputs cleanup every hour (seconds)
+# Run periodic cleanup every hour (seconds)
 CLEANUP_INTERVAL_SECONDS = 3600
+
+# Max upload file size (default 50MB)
+MAX_FILE_SIZE = int(os.getenv("MAX_FILE_SIZE", 50 * 1024 * 1024))
+
+# Max age for temporary files
+UPLOAD_MAX_AGE_SECONDS = int(os.getenv("UPLOAD_MAX_AGE_SECONDS", 24 * 3600))  # default 24 hours
+
 
 
 async def _periodic_cleanup():
-    """Background task: clean outputs dir every CLEANUP_INTERVAL_SECONDS."""
+    """Background task: clean temporary file directories every CLEANUP_INTERVAL_SECONDS."""
     while True:
         await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)
         try:
-            n = cleanup_outputs_dir(outputs_dir, DEFAULT_MAX_AGE_SECONDS)
-            if n:
-                logger.info("Periodic cleanup: removed %d file(s) from outputs/", n)
+            n_outputs = cleanup_outputs_dir(outputs_dir, DEFAULT_MAX_AGE_SECONDS)
+            if n_outputs:
+                logger.info("Periodic cleanup: removed %d file(s) from outputs/", n_outputs)
+
+            n_uploads = cleanup_outputs_dir(uploads_dir, UPLOAD_MAX_AGE_SECONDS)
+            if n_uploads:
+                logger.info("Periodic cleanup: removed %d file(s) from uploads/", n_uploads)
         except Exception as e:
             logger.warning("Periodic cleanup failed: %s", e)
 
@@ -57,9 +77,13 @@ async def lifespan(app: FastAPI):
 
     # Cleanup old output files on startup
     try:
-        n = cleanup_outputs_dir(outputs_dir, DEFAULT_MAX_AGE_SECONDS)
-        if n:
-            logger.info("Startup cleanup: removed %d file(s) from outputs/", n)
+        n_out = cleanup_outputs_dir(outputs_dir, DEFAULT_MAX_AGE_SECONDS)
+        if n_out:
+            logger.info("Startup cleanup: removed %d file(s) from outputs/", n_out)
+
+        n_up = cleanup_outputs_dir(uploads_dir, UPLOAD_MAX_AGE_SECONDS)
+        if n_up:
+            logger.info("Startup cleanup: removed %d file(s) from uploads/", n_up)
     except Exception as e:
         logger.warning("Startup output cleanup failed: %s", e)
 
@@ -83,6 +107,33 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+
+@app.middleware("http")
+async def validate_file_size(request: Request, call_next):
+    """Reject files larger than MAX_FILE_SIZE."""
+    if request.method == "POST":
+        content_type = request.headers.get("content-type", "")
+        if "multipart/form-data" in content_type:
+            content_length = request.headers.get("content-length")
+            if content_length:
+                try:
+                    size = int(content_length)
+                    if size > MAX_FILE_SIZE:
+                        return JSONResponse(
+                            status_code=413,
+                            content={
+                                "detail": f"File too large. Maximum size is {MAX_FILE_SIZE / (1024*1024):.0f}MB"
+                            },
+                        )
+                except ValueError:
+                    pass
+    response = await call_next(request)
+    return response
+
+
 # CORS: allow origins from env (e.g. production frontend URL) or localhost for dev
 _allowed_origins = os.environ.get(
     "ALLOWED_ORIGINS",
@@ -104,6 +155,7 @@ app.include_router(excel.router, prefix="/api/v1", tags=["excel"])
 app.include_router(transform.router, prefix="/api/v1", tags=["transform"])
 app.include_router(merge.router, prefix="/api/v1", tags=["merge"])
 app.include_router(analyze.router, prefix="/api/v1", tags=["analyze"])
+app.include_router(ai.router, prefix="/api/v1/ai", tags=["AI Assistant"])
 
 
 @app.get("/")

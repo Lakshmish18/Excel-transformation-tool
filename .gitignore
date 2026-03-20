@@ -15,9 +15,14 @@ outputs/
 # Secrets and local config (keep .env.example)
 .env
 .env.local
+.env.production
 .env.*.local
 frontend/.env
 frontend/.env.local
+backend/.env
+
+# Storage (ephemeral)
+storage/
 
 # IDE and OS
 .idea/
@@ -29,6 +34,7 @@ Thumbs.db
 
 # Python
 __pycache__/
+*.pyc
 *.py[cod]
 *.egg-info/
 .pytest_cache/

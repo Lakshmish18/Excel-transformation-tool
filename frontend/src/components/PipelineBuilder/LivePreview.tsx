@@ -11,7 +11,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { excelApi, type Operation, type TransformResponse } from '@/lib/api'
+import { excelApi, getApiErrorDetail, type Operation, type TransformResponse } from '@/lib/api'
 import { useDebounce } from '@/hooks/useDebounce'
 import { AlertCircle, Eye } from 'lucide-react'
 
@@ -60,12 +60,7 @@ export function LivePreview({
       })
       .catch((err) => {
         if (!cancelled) {
-          const msg =
-            err?.response?.data?.detail?.message ||
-            (typeof err?.response?.data?.detail === 'string' ? err.response.data.detail : null) ||
-            err?.message ||
-            'Preview failed'
-          setError(String(msg))
+          setError(getApiErrorDetail(err))
           setData(null)
         }
       })

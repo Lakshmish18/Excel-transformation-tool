@@ -10,7 +10,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { CheckCircle2, AlertCircle, Loader2, Sparkles } from 'lucide-react'
-import { excelApi, type Operation } from '@/lib/api'
+import { excelApi, getApiErrorDetail, type Operation } from '@/lib/api'
 import { useDebounce } from '@/hooks/useDebounce'
 
 interface OperationWizardProps {
@@ -36,6 +36,7 @@ export function OperationWizard({
   onApply,
   onCancel,
 }: OperationWizardProps) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Form fields vary by operation type
   const [formData, setFormData] = useState<Record<string, any>>({})
   const [validationError, setValidationError] = useState<ValidationError | null>(null)
   const [isValidating, setIsValidating] = useState(false)
@@ -90,9 +91,9 @@ export function OperationWizard({
           }
         }
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       setIsValid(false)
-      const errorDetail = err.response?.data?.detail || err.message || 'Validation failed'
+      const errorDetail = getApiErrorDetail(err)
       setValidationError({
         message: errorDetail,
         suggestions: extractSuggestions(errorDetail),
@@ -166,7 +167,7 @@ export function OperationWizard({
     if (!operationType) return null
 
     const baseOp: Operation = {
-      type: operationType as any,
+      type: operationType as Operation['type'],
       params: {},
     }
 

@@ -38,7 +38,10 @@ export function PipelinePage() {
     })
   }, [loadId])
 
-  const initialOperations = useMemo(() => loadedOperations, [loadedOperations])
+  const initialOperations = useMemo(() => {
+    if (loadedOperations?.length) return loadedOperations
+    return operations?.length ? operations : undefined
+  }, [loadedOperations, operations])
 
   useEffect(() => {
     if (!uploadData || !selectedSheet) {
@@ -50,8 +53,8 @@ export function PipelinePage() {
       .catch(() => setColumns([]))
   }, [uploadData, selectedSheet, navigate])
 
-  const handleTransformSuccess = (data: { columns: string[]; rows: Record<string, unknown>[]; rowCountAfter: number }) => {
-    setTransformResult(data as any)
+  const handleTransformSuccess = (data: import('@/lib/api').TransformResponse) => {
+    setTransformResult(data)
     if (uploadData) {
       addRecentTransformation({
         fileName: uploadData.fileName,
@@ -63,8 +66,8 @@ export function PipelinePage() {
     navigate('/results')
   }
 
-  const handleError = (message: string) => {
-    toast.error(message)
+  const handleError = (_message: string | unknown) => {
+    // API interceptor already shows toast; use for inline display if needed
   }
 
   if (!uploadData || !selectedSheet) return null

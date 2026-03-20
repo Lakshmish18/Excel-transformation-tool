@@ -8,20 +8,34 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { DataPreview } from '@/components/DataPreview'
 import { DataInsights } from '@/components/DataInsights'
 import { AutoCharts } from '@/components/AutoCharts'
+import { AutoKPIs } from '@/components/AutoKPIs'
+import { ColumnProfiler } from '@/components/ColumnProfiler'
 import { SkeletonTable } from '@/components/skeletons'
 import { useApp } from '@/context/AppContext'
-import { excelApi } from '@/lib/api'
+import { excelApi, getApiErrorDetail } from '@/lib/api'
 import { Download, RotateCcw, Edit, Loader2 } from 'lucide-react'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { toast } from 'sonner'
 import confetti from 'canvas-confetti'
 import { saveTransformationHistory } from '@/lib/supabase-history'
+import { logger } from '@/lib/logger'
+import { RowCountIndicator } from '@/components/RowCountIndicator'
 import { uploadTransformedFile } from '@/lib/supabase-storage'
+import { useProfile } from '@/context/ProfileContext'
 
 export function ResultsPage() {
   const navigate = useNavigate()
   const { uploadData, selectedSheet, operations, transformResult } = useApp()
   const [initialLoadDone, setInitialLoadDone] = useState(false)
   const [isDownloading, setIsDownloading] = useState(false)
+  const [selectedColumn, setSelectedColumn] = useState<string>('')
+  const { config } = useProfile()
 
   useEffect(() => {
     if (!uploadData || !selectedSheet) {
@@ -60,7 +74,7 @@ export function ResultsPage() {
 
     setIsDownloading(true)
     try {
-      console.log('Exporting transform:', { fileId: uploadData.fileId, sheetName: selectedSheet, operationsCount: opsToUse.length })
+      logger.debug('Exporting transform:', { fileId: uploadData.fileId, sheetName: selectedSheet, operationsCount: opsToUse.length })
       
       const blob = await excelApi.exportTransform(uploadData.fileId, selectedSheet, opsToUse)
       
@@ -84,68 +98,25 @@ export function ResultsPage() {
       confetti({ particleCount: 80, spread: 70, origin: { y: 0.6 } })
       toast.success('File downloaded successfully!')
       
-      // Save transformation history
+      // Save transformation history and upload file to Supabase (non-blocking)
       try {
-        // Upload file to Supabase Storage (optional)
         const fileUrl = await uploadTransformedFile(blob, uploadData.fileName)
-        
-        // Save history record
         await saveTransformationHistory(
           uploadData.fileName,
           opsToUse,
           transformResult.rowCountBefore,
           transformResult.rowCountAfter,
-          undefined, // original_file_url (not stored currently)
-          fileUrl || undefined, // transformed_file_url
-          undefined, // pipeline_id
+          undefined,
+          fileUrl || undefined,
+          undefined,
           'success'
         )
       } catch (historyError) {
-        // Non-critical - don't show error to user
         console.error('Failed to save history:', historyError)
-      }
-
-      // Save transformation history and upload file to Supabase (non-blocking)
-      if (transformResult && uploadData) {
-        try {
-          // Upload file to Supabase Storage
-          const fileUrl = await uploadTransformedFile(blob, uploadData.fileName)
-          
-          // Save history
-          await saveTransformationHistory(
-            uploadData.fileName,
-            opsToUse,
-            transformResult.rowCountBefore,
-            transformResult.rowCountAfter,
-            undefined, // original_file_url (not stored currently)
-            fileUrl || undefined,
-            undefined, // pipeline_id (can be linked if saved pipeline was used)
-            'success'
-          )
-        } catch (error) {
-          // Non-critical - don't show error to user
-          console.error('Failed to save history:', error)
-        }
       }
     } catch (e: unknown) {
       console.error('Download error:', e)
-      let errorMsg = 'Download failed'
-      
-      if (e && typeof e === 'object') {
-        if ('response' in e) {
-          const response = (e as { response?: { data?: { detail?: unknown } } }).response
-          const detail = response?.data?.detail
-          if (typeof detail === 'string') {
-            errorMsg = detail
-          } else if (detail && typeof detail === 'object' && 'message' in detail) {
-            errorMsg = String((detail as { message: unknown }).message)
-          }
-        } else if ('message' in e) {
-          errorMsg = String((e as { message: unknown }).message)
-        }
-      }
-      
-      toast.error(errorMsg)
+      // Axios interceptor already shows a user-friendly toast.
     } finally {
       setIsDownloading(false)
     }
@@ -192,12 +163,50 @@ export function ResultsPage() {
         <CardContent>
           {transformResult ? (
             <div className="space-y-6">
+              {/* Auto KPIs */}
+              {config.features.showKPIs && (
+                <AutoKPIs data={transformResult.rows} columns={transformResult.columns} />
+              )}
+
+              {/* Row Count Indicator */}
+              <RowCountIndicator
+                originalCount={transformResult.rowCountBefore}
+                currentCount={transformResult.rowCountAfter}
+                operationName={
+                  operations && operations.length > 0
+                    ? `${operations.length} operation${operations.length > 1 ? 's' : ''}`
+                    : undefined
+                }
+              />
               {/* Data Insights */}
               <DataInsights columns={transformResult.columns} rows={transformResult.rows} />
-              
-              {/* Auto-generated Charts */}
-              <AutoCharts columns={transformResult.columns} rows={transformResult.rows} />
-              
+
+              {/* Auto-generated Charts (trend-style visuals) */}
+              {config.features.showTrendCharts && (
+                <AutoCharts columns={transformResult.columns} rows={transformResult.rows} />
+              )}
+
+              {/* Column Profiler */}
+              {config.features.showColumnProfiling && transformResult.columns.length > 0 && (
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Column Profiler</label>
+                  <Select value={selectedColumn || transformResult.columns[0]} onValueChange={setSelectedColumn}>
+                    <SelectTrigger className="w-48">
+                      <SelectValue placeholder="Select column" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {transformResult.columns.map((col) => (
+                        <SelectItem key={col} value={col}>{col}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <ColumnProfiler
+                    column={selectedColumn || transformResult.columns[0]}
+                    data={transformResult.rows}
+                  />
+                </div>
+              )}
+
               {/* Data Preview Table */}
               <DataPreview
                 sheets={uploadData.sheets}

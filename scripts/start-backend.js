@@ -22,7 +22,7 @@ if (!fs.existsSync(uvicornPath)) {
   process.exit(1);
 }
 
-const child = spawn(uvicornPath, ['app.main:app', '--reload', '--port', '8000'], {
+const child = spawn(uvicornPath, ['app.main:app', '--reload', '--host', '0.0.0.0', '--port', '8000'], {
   cwd: backendDir,
   stdio: 'inherit',
   shell: false,

@@ -169,11 +169,15 @@ def apply_math(df: pd.DataFrame, params: Dict[str, Any]) -> pd.DataFrame:
     col_b_or_value = params['colBOrValue']
     new_column = params['newColumn']
     validate_column_exists(df, col_a)
+    validate_math_operation(df, params)  # Ensure col_a is numeric before proceeding
     df_result = df.copy()
     is_column = isinstance(col_b_or_value, str) and col_b_or_value in df.columns
     if is_column:
         validate_column_exists(df, col_b_or_value)
         series_b = df_result[col_b_or_value]
+        # Ensure series_b is numeric for math
+        if not pd.api.types.is_numeric_dtype(series_b):
+            series_b = pd.to_numeric(series_b, errors='coerce')
     else:
         try:
             numeric_value = float(col_b_or_value)
@@ -181,21 +185,29 @@ def apply_math(df: pd.DataFrame, params: Dict[str, Any]) -> pd.DataFrame:
         except (ValueError, TypeError):
             available_columns = [str(col) for col in df.columns]
             raise ColumnNotFoundError(str(col_b_or_value), available_columns)
-    if operation == 'add':
-        df_result[new_column] = df_result[col_a] + series_b
-    elif operation == 'subtract':
-        df_result[new_column] = df_result[col_a] - series_b
-    elif operation == 'multiply':
-        df_result[new_column] = df_result[col_a] * series_b
-    elif operation == 'divide':
-        if is_column:
-            df_result[new_column] = df_result[col_a] / series_b.replace(0, pd.NA)
+    try:
+        if operation == 'add':
+            df_result[new_column] = df_result[col_a] + series_b
+        elif operation == 'subtract':
+            df_result[new_column] = df_result[col_a] - series_b
+        elif operation == 'multiply':
+            df_result[new_column] = df_result[col_a] * series_b
+        elif operation == 'divide':
+            if is_column:
+                # Avoid division by zero: replace 0 with NA
+                divisor = series_b.replace(0, pd.NA)
+                df_result[new_column] = df_result[col_a] / divisor
+            else:
+                if series_b == 0:
+                    raise ValueError("Division by zero. Use a non-zero value or column.")
+                df_result[new_column] = df_result[col_a] / series_b
         else:
-            if series_b == 0:
-                raise ValueError("Division by zero")
-            df_result[new_column] = df_result[col_a] / series_b
-    else:
-        raise ValueError(f"Unsupported operation: {operation}")
+            raise ValueError(f"Unsupported operation: {operation}")
+    except (TypeError, ValueError) as e:
+        raise ValueError(
+            f"Math operation failed on column '{col_a}': {e}. "
+            f"Ensure the column contains numeric values."
+        ) from e
     return df_result
 
 

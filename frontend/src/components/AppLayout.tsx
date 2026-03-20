@@ -14,6 +14,7 @@ import { GuidedTour, getTourCompleted, setTourCompleted } from '@/components/Gui
 import { KeyboardShortcuts } from '@/components/KeyboardShortcuts'
 import { Auth } from '@/components/Auth'
 import { restartProductTour } from '@/components/ProductTour'
+import { useProfile } from '@/context/ProfileContext'
 
 interface BreadcrumbItem {
   label: string
@@ -71,6 +72,7 @@ export function AppLayout() {
 
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
   const [tourRun, setTourRun] = useState(false)
+  const { config, showProfileSelector } = useProfile()
 
   useEffect(() => {
     if (!getTourCompleted()) setTourRun(true)
@@ -118,12 +120,27 @@ export function AppLayout() {
               <h1 className="text-lg font-semibold">Excel Data Transformation Tool</h1>
             </Link>
             <div className="flex items-center gap-1">
+              {config.features.showDashboard && (
+                <Link to="/dashboard">
+                  <Button variant="ghost" size="sm" className="text-white hover:bg-white/10" title="Dashboard">
+                    Dashboard
+                  </Button>
+                </Link>
+              )}
               <Link to="/history">
                 <Button variant="ghost" size="sm" className="text-white hover:bg-white/10" title="View transformation history">
                   <History className="h-4 w-4 mr-1" />
                   History
                 </Button>
               </Link>
+              <button
+                type="button"
+                onClick={showProfileSelector}
+                className="flex items-center gap-2 px-3 py-1.5 bg-white/10 rounded-full hover:bg-white/20 transition text-sm font-medium"
+              >
+                <span>{config.icon}</span>
+                <span>{config.name}</span>
+              </button>
               <Popover>
                 <PopoverTrigger asChild>
                   <Button variant="ghost" size="sm" className="text-white hover:bg-white/10" aria-label="Account">

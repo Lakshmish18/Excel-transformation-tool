@@ -205,7 +205,7 @@ export function SmartColumnSelector(props: SmartColumnSelectorProps) {
 
   const selectSingle = useCallback(
     (col: string) => {
-      ;(onValueChange as (v: string) => void)(col)
+      void (onValueChange as (v: string) => void)(col)
       pushRecentColumn(col)
       setOpen(false)
       setSearch('')
@@ -219,18 +219,18 @@ export function SmartColumnSelector(props: SmartColumnSelectorProps) {
       const idx = arr.indexOf(col)
       if (idx >= 0) arr.splice(idx, 1)
       else arr.push(col)
-      ;(onValueChange as (v: string[]) => void)(arr)
+      void (onValueChange as (v: string[]) => void)(arr)
       pushRecentColumn(col)
     },
     [value, onValueChange]
   )
 
   const selectAll = useCallback(() => {
-    ;(onValueChange as (v: string[]) => void)([...filtered])
+    void (onValueChange as (v: string[]) => void)([...filtered])
   }, [filtered, onValueChange])
 
   const clearAll = useCallback(() => {
-    ;(onValueChange as (v: string[]) => void)([])
+    void (onValueChange as (v: string[]) => void)([])
   }, [onValueChange])
 
   useEffect(() => {

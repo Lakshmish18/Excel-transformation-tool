@@ -2,6 +2,7 @@
  * Supabase Storage functions for file uploads
  */
 import { supabase, getCurrentUserId, isSupabaseConfigured } from './supabase'
+import { logger } from './logger'
 import { toast } from 'sonner'
 
 const STORAGE_BUCKET = 'transformed-files'
@@ -14,14 +15,14 @@ export async function uploadTransformedFile(
   fileName: string
 ): Promise<string | null> {
   if (!isSupabaseConfigured() || !supabase) {
-    console.log('Supabase not configured, skipping file upload')
+    logger.debug('Supabase not configured, skipping file upload')
     return null
   }
 
   try {
     const userId = await getCurrentUserId()
     if (!userId) {
-      console.log('User not signed in, skipping file upload')
+      logger.debug('User not signed in, skipping file upload')
       return null
     }
 
@@ -38,7 +39,7 @@ export async function uploadTransformedFile(
       })
 
     if (error) {
-      console.error('Upload error:', error)
+      logger.error('Upload error:', error)
       // Don't show error toast - file upload is optional
       return null
     }
@@ -50,7 +51,7 @@ export async function uploadTransformedFile(
 
     return urlData.publicUrl
   } catch (error) {
-    console.error('Upload exception:', error)
+    logger.error('Upload exception:', error)
     return null
   }
 }
@@ -79,7 +80,7 @@ export async function downloadFile(fileUrl: string, fileName: string): Promise<b
       .download(filePath)
 
     if (error) {
-      console.error('Download error:', error)
+      logger.error('Download error:', error)
       toast.error('Failed to download file: ' + error.message)
       return false
     }
@@ -96,7 +97,7 @@ export async function downloadFile(fileUrl: string, fileName: string): Promise<b
 
     return true
   } catch (error) {
-    console.error('Download exception:', error)
+    logger.error('Download exception:', error)
     toast.error('Failed to download file')
     return false
   }
@@ -121,13 +122,13 @@ export async function deleteFile(fileUrl: string): Promise<boolean> {
     const { error } = await supabase.storage.from(STORAGE_BUCKET).remove([filePath])
 
     if (error) {
-      console.error('Delete file error:', error)
+      logger.error('Delete file error:', error)
       return false
     }
 
     return true
   } catch (error) {
-    console.error('Delete file exception:', error)
+    logger.error('Delete file exception:', error)
     return false
   }
 }

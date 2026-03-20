@@ -3,18 +3,20 @@ Core Excel file upload and preview endpoints for Phase 1.
 """
 import os
 import uuid
-import shutil
 import logging
 import zipfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Dict, Any, List, Optional, Literal
-from fastapi import APIRouter, UploadFile, File, HTTPException, Query
+from typing import Dict, Any, List, Optional
+from fastapi import APIRouter, UploadFile, File, HTTPException, Query, Request
 from fastapi.responses import FileResponse
+
+from app.limiter import limiter
 import pandas as pd
 import openpyxl
 
-from app.utils.excel_loader import load_excel_with_header_detection
+from app.utils.excel_loader import load_file_with_header_detection
+from app.utils.data_quality import calculate_data_quality_score
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +32,61 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 
 # In-memory storage for file metadata (fileId -> file info)
 file_storage: Dict[str, Dict[str, Any]] = {}
+
+ALLOWED_EXTENSIONS = ['.xlsx', '.csv']
+MAX_FILENAME_LENGTH = 255
+
+
+def _looks_like_csv_bytes(content: bytes) -> bool:
+    """Heuristic: detect text/CSV payload from initial bytes."""
+    if not content:
+        return False
+    try:
+        text = content.decode('utf-8')
+    except UnicodeDecodeError:
+        return False
+    # Basic CSV-ish signal: has line breaks and common separators.
+    return ('\n' in text or '\r' in text) and (',' in text or ';' in text or '\t' in text)
+
+
+async def _validate_upload_file(file: UploadFile) -> None:
+    """Validate Excel or CSV file. Raises HTTPException on failure."""
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Filename is required")
+    if len(file.filename) > MAX_FILENAME_LENGTH:
+        raise HTTPException(status_code=400, detail="Filename too long")
+    file_ext = os.path.splitext(file.filename)[1].lower()
+    if file_ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid file type. Supported: {', '.join(ALLOWED_EXTENSIONS)}",
+        )
+    header = await file.read(8)
+    await file.seek(0)
+    if file_ext == '.xlsx':
+        if not header.startswith(b'PK'):
+            # Some users upload CSV content with .xlsx extension.
+            sample = await file.read(4096)
+            await file.seek(0)
+            if _looks_like_csv_bytes(sample):
+                # Mark for downstream processing as CSV.
+                setattr(file, "_detected_ext", ".csv")
+                logger.info("Upload appears to be CSV content with .xlsx extension: %s", file.filename)
+            else:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid file format. File does not appear to be a valid Excel file.",
+                )
+    elif file_ext == '.csv':
+        try:
+            test_content = await file.read(1024)
+            test_content.decode('utf-8')
+            await file.seek(0)
+        except UnicodeDecodeError:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid CSV encoding. Use UTF-8.",
+            )
 
 
 def _get_sheet_names_fast(file_path: Path) -> List[str]:
@@ -112,29 +169,24 @@ def _rebuild_file_storage_from_disk():
     if not UPLOAD_DIR.exists():
         return
     
-    for file_path in UPLOAD_DIR.glob("*.xlsx"):
-        try:
-            # Extract file_id from filename (format: {file_id}.xlsx)
-            file_id = file_path.stem
-            
-            # Skip if already in storage
-            if file_id in file_storage:
-                continue
-            
-            # Read sheet names quickly
-            sheet_names = _get_sheet_names_fast(file_path)
-            
-            # Rebuild metadata
-            file_storage[file_id] = {
-                "file_id": file_id,
-                "filename": f"recovered_{file_id}.xlsx",  # We don't know original name
-                "file_path": str(file_path),
-                "sheets": sheet_names,
-            }
-        except Exception as e:
-            # Skip files that can't be read
-            logger.warning(f"Could not rebuild metadata for {file_path}: {e}")
-            continue
+    for pattern in ("*.xlsx", "*.csv"):
+        for file_path in UPLOAD_DIR.glob(pattern):
+            try:
+                file_id = file_path.stem
+                if file_id in file_storage:
+                    continue
+                if file_path.suffix.lower() == '.csv':
+                    sheet_names = ['Sheet1']
+                else:
+                    sheet_names = _get_sheet_names_fast(file_path)
+                file_storage[file_id] = {
+                    "file_id": file_id,
+                    "filename": f"recovered_{file_id}{file_path.suffix}",
+                    "file_path": str(file_path),
+                    "sheets": sheet_names,
+                }
+            except Exception as e:
+                logger.warning(f"Could not rebuild metadata for {file_path}: {e}")
 
 
 def _get_file_info(file_id: str) -> Dict[str, Any]:
@@ -153,28 +205,26 @@ def _get_file_info(file_id: str) -> Dict[str, Any]:
             # File on disk was deleted, remove from storage
             del file_storage[file_id]
     
-    # Not in memory, check if file exists on disk
-    file_path = UPLOAD_DIR / f"{file_id}.xlsx"
-    if file_path.exists():
-        try:
-            # Rebuild metadata from disk using fast method
-            sheet_names = _get_sheet_names_fast(file_path)
-            
-            file_info = {
-                "file_id": file_id,
-                "filename": f"recovered_{file_id}.xlsx",
-                "file_path": str(file_path),
-                "sheets": sheet_names,
-            }
-            # Store in memory for future use
-            file_storage[file_id] = file_info
-            return file_info
-        except Exception as e:
-            logger.error(f"Error reading file {file_id} from disk: {e}")
-            raise HTTPException(
-                status_code=500,
-                detail=f"Error reading file from disk: {str(e)}"
-            )
+    # Not in memory, check if file exists on disk (.xlsx or .csv)
+    for ext in ('.xlsx', '.csv'):
+        file_path = UPLOAD_DIR / f"{file_id}{ext}"
+        if file_path.exists():
+            try:
+                sheet_names = ['Sheet1'] if ext == '.csv' else _get_sheet_names_fast(file_path)
+                file_info = {
+                    "file_id": file_id,
+                    "filename": f"recovered_{file_id}{ext}",
+                    "file_path": str(file_path),
+                    "sheets": sheet_names,
+                }
+                file_storage[file_id] = file_info
+                return file_info
+            except Exception as e:
+                logger.error(f"Error reading file {file_id} from disk: {e}")
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Error reading file from disk: {str(e)}"
+                )
     
     # File not found
     raise HTTPException(
@@ -184,7 +234,8 @@ def _get_file_info(file_id: str) -> Dict[str, Any]:
 
 
 @router.post("/upload-excel")
-async def upload_excel(file: UploadFile = File(...)) -> Dict[str, Any]:
+@limiter.limit("10/minute")
+async def upload_excel(request: Request, file: UploadFile = File(...)) -> Dict[str, Any]:
     """
     Upload an Excel file and return file ID and sheet names.
     
@@ -198,27 +249,32 @@ async def upload_excel(file: UploadFile = File(...)) -> Dict[str, Any]:
             "sheets": List[str]
         }
     """
+    await _validate_upload_file(file)
     return await _process_single_file(file)
 
 
 async def _process_single_file(file: UploadFile) -> Dict[str, Any]:
     """
-    Process a single file upload - OPTIMIZED FOR SPEED.
+    Process a single file upload (Excel or CSV).
     """
-    # Quick validation
-    if not file.filename or not file.filename.endswith('.xlsx'):
-        raise HTTPException(status_code=400, detail="Invalid file. Only .xlsx files supported.")
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Filename is required")
+    file_ext = os.path.splitext(file.filename)[1].lower()
+    detected_ext = getattr(file, "_detected_ext", file_ext)
+    if detected_ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(status_code=400, detail=f"Invalid file type. Supported: {', '.join(ALLOWED_EXTENSIONS)}")
     
     file_id = str(uuid.uuid4())
-    file_path = UPLOAD_DIR / f"{file_id}.xlsx"
+    file_path = UPLOAD_DIR / f"{file_id}{detected_ext}"
     
     try:
-        # Step 1: Save file (instant for 11KB)
         file_content = await file.read()
         file_path.write_bytes(file_content)
         
-        # Step 2: Get sheet names (should be < 10ms with XML, < 500ms with openpyxl fallback)
-        sheet_names = _get_sheet_names_fast(file_path)
+        if detected_ext == '.csv':
+            sheet_names = ['Sheet1']
+        else:
+            sheet_names = _get_sheet_names_fast(file_path)
         
         # Step 3: Store metadata
         file_storage[file_id] = {
@@ -249,7 +305,8 @@ async def _process_single_file(file: UploadFile) -> Dict[str, Any]:
 
 
 @router.post("/upload-multiple-excel")
-async def upload_multiple_excel(files: List[UploadFile] = File(...)) -> Dict[str, Any]:
+@limiter.limit("10/minute")
+async def upload_multiple_excel(request: Request, files: List[UploadFile] = File(...)) -> Dict[str, Any]:
     """
     Upload multiple Excel files and return file IDs and sheet names.
     
@@ -275,6 +332,8 @@ async def upload_multiple_excel(files: List[UploadFile] = File(...)) -> Dict[str
             detail="No files provided"
         )
     
+    for f in files:
+        await _validate_upload_file(f)
     if len(files) == 1:
         # Single file, use existing endpoint logic
         result = await _process_single_file(files[0])
@@ -312,7 +371,9 @@ async def upload_multiple_excel(files: List[UploadFile] = File(...)) -> Dict[str
 
 
 @router.get("/preview-sheet")
+@limiter.limit("30/minute")
 async def preview_sheet(
+    request: Request,
     fileId: str = Query(..., description="File ID from upload"),
     sheetName: str = Query(..., description="Name of the sheet to preview"),
     limit: int = Query(10, ge=1, le=50, description="Number of rows to return"),
@@ -362,10 +423,9 @@ async def preview_sheet(
         )
     
     try:
-        # Load Excel with header detection
-        df, detected_header_row, warning = load_excel_with_header_detection(
+        df, detected_header_row, warning = load_file_with_header_detection(
             file_path,
-            sheet_name=sheetName,
+            sheet_name=sheetName if file_path.suffix.lower() != '.csv' else None,
             header_row_index=headerRowIndex,
             nrows=limit
         )
@@ -377,19 +437,23 @@ async def preview_sheet(
         
         # Get column names
         columns = [str(col) for col in df.columns]
-        
+
+        # Calculate data quality score (use full data for accurate metrics - we have limit rows)
+        quality_score = calculate_data_quality_score(df)
+
         response = {
             "fileId": fileId,
             "sheetName": sheetName,
             "columns": columns,
             "rows": rows,
             "headerRowIndex": detected_header_row,
+            "quality": quality_score,
         }
-        
+
         # Add warning if present
         if warning:
             response["warning"] = warning
-        
+
         return response
     except ValueError as e:
         logger.error(f"ValueError reading sheet {sheetName} from file {fileId}: {e}")

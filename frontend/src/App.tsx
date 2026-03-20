@@ -15,7 +15,9 @@ import { BatchResultsPage } from '@/pages/BatchResultsPage'
 import { MergePage } from '@/pages/MergePage'
 import { MergeResultsPage } from '@/pages/MergeResultsPage'
 import { HistoryPage } from '@/pages/HistoryPage'
+import { DashboardPage } from '@/pages/DashboardPage'
 import { DocumentationPage } from '@/pages/DocumentationPage'
+import { SettingsPage } from '@/pages/SettingsPage'
 
 function App() {
   return (
@@ -31,8 +33,10 @@ function App() {
           <Route path="batch/results" element={<ErrorBoundary><BatchResultsPage /></ErrorBoundary>} />
           <Route path="merge" element={<ErrorBoundary><MergePage /></ErrorBoundary>} />
           <Route path="merge/results" element={<ErrorBoundary><MergeResultsPage /></ErrorBoundary>} />
+          <Route path="dashboard" element={<ErrorBoundary><DashboardPage /></ErrorBoundary>} />
           <Route path="history" element={<ErrorBoundary><HistoryPage /></ErrorBoundary>} />
           <Route path="docs" element={<ErrorBoundary><DocumentationPage /></ErrorBoundary>} />
+          <Route path="settings/profile" element={<ErrorBoundary><SettingsPage /></ErrorBoundary>} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>

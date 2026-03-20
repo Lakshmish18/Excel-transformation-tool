@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.api.v1.excel import file_storage, UPLOAD_DIR
+from app.services.ai_assistant import ai_assistant, OpenAIConfigError
 
 client = TestClient(app)
 
@@ -145,3 +146,225 @@ class TestPreviewTransform:
         assert "rows" in data
         assert data["rowCountBefore"] >= 1
         assert data["rowCountAfter"] >= 0
+
+
+class TestExportTransform:
+    def test_export_transform_returns_excel_file(self):
+        upload = client.post(
+            "/api/v1/upload-excel",
+            files={"file": ("test.xlsx", _make_excel_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        )
+        assert upload.status_code == 200
+        file_id = upload.json()["fileId"]
+
+        r = client.post(
+            "/api/v1/export-transform",
+            json={
+                "fileId": file_id,
+                "sheetName": "Sheet1",
+                "operations": [
+                    {"type": "filter", "params": {"column": "A", "operator": "equals", "value": 1}},
+                ],
+            },
+        )
+        assert r.status_code == 200
+        assert r.headers["content-type"] == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        assert int(r.headers.get("content-length", "0")) >= 1
+
+
+class TestBatchTransform:
+    def test_batch_transform_individual_mode(self):
+        # Upload two small files
+        upload1 = client.post(
+            "/api/v1/upload-excel",
+            files={"file": ("test1.xlsx", _make_excel_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        )
+        upload2 = client.post(
+            "/api/v1/upload-excel",
+            files={"file": ("test2.xlsx", _make_excel_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        )
+        assert upload1.status_code == 200
+        assert upload2.status_code == 200
+        file_id_1 = upload1.json()["fileId"]
+        file_id_2 = upload2.json()["fileId"]
+
+        r = client.post(
+            "/api/v1/batch-transform",
+            json={
+                "fileIds": [file_id_1, file_id_2],
+                "sheetName": "Sheet1",
+                "operations": [
+                    {"type": "filter", "params": {"column": "A", "operator": "equals", "value": 1}},
+                ],
+                "outputFormat": "individual",
+            },
+        )
+        assert r.status_code == 200
+        data = r.json()
+        assert "results" in data
+        assert len(data["results"]) == 2
+        assert data.get("zipUrl") is None
+
+    def test_batch_transform_zip_mode_and_download(self):
+        # Upload two small files
+        upload1 = client.post(
+            "/api/v1/upload-excel",
+            files={"file": ("test1.xlsx", _make_excel_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        )
+        upload2 = client.post(
+            "/api/v1/upload-excel",
+            files={"file": ("test2.xlsx", _make_excel_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        )
+        assert upload1.status_code == 200
+        assert upload2.status_code == 200
+        file_id_1 = upload1.json()["fileId"]
+        file_id_2 = upload2.json()["fileId"]
+
+        r = client.post(
+            "/api/v1/batch-transform",
+            json={
+                "fileIds": [file_id_1, file_id_2],
+                "sheetName": "Sheet1",
+                "operations": [
+                    {"type": "filter", "params": {"column": "A", "operator": "equals", "value": 1}},
+                ],
+                "outputFormat": "zip",
+            },
+        )
+        assert r.status_code == 200
+        data = r.json()
+        assert "results" in data
+        assert len(data["results"]) == 2
+        # New contract: zipId plus relative zipUrl
+        assert data.get("zipId")
+        assert data.get("zipUrl", "").startswith("/download-batch-zip")
+
+        zip_id = data["zipId"]
+        download = client.get(f"/api/v1/download-batch-zip?zipId={zip_id}")
+        assert download.status_code == 200
+        assert download.headers["content-type"] == "application/zip"
+
+
+class TestMergeFiles:
+    def test_merge_files_append_and_join(self):
+        upload1 = client.post(
+            "/api/v1/upload-excel",
+            files={"file": ("merge1.xlsx", _make_excel_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        )
+        upload2 = client.post(
+            "/api/v1/upload-excel",
+            files={"file": ("merge2.xlsx", _make_excel_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        )
+        assert upload1.status_code == 200
+        assert upload2.status_code == 200
+        file_id_1 = upload1.json()["fileId"]
+        file_id_2 = upload2.json()["fileId"]
+
+        # Append strategy
+        r_append = client.post(
+            "/api/v1/merge-files",
+            json={
+                "fileIds": [file_id_1, file_id_2],
+                "strategy": "append",
+            },
+        )
+        assert r_append.status_code == 200
+        data_append = r_append.json()
+        assert data_append["rowCount"] == 4  # 2 + 2 rows
+        assert data_append["columnCount"] == 2
+
+        # Join strategy on column A
+        r_join = client.post(
+            "/api/v1/merge-files",
+            json={
+                "fileIds": [file_id_1, file_id_2],
+                "strategy": "join",
+                "joinColumn": "A",
+                "joinType": "inner",
+            },
+        )
+        assert r_join.status_code == 200
+        data_join = r_join.json()
+        assert data_join["rowCount"] == 2
+        assert data_join["columnCount"] >= 2
+
+
+class TestAnalyzeData:
+    def test_analyze_data_basic_happy_path(self):
+        df = pd.DataFrame({"A": [1, 2, 3], "B": [4, 5, 6]})
+        rows = df.to_dict(orient="records")
+
+        r = client.post(
+            "/api/v1/analyze-data",
+            json={
+                "columns": ["A", "B"],
+                "rows": rows,
+            },
+        )
+        assert r.status_code == 200
+        data = r.json()
+        assert "insights" in data
+        assert "visualizations" in data
+        assert "summary" in data
+        assert data["summary"]["total_rows"] == 3
+
+
+class TestAIEndpoints:
+    def test_ai_analyze_data_endpoint_happy_path(self, monkeypatch):
+        # Mock AI output to avoid real OpenAI calls.
+        def _mock_analyze_data(_df: pd.DataFrame, _user_profile: str = 'general') -> dict:
+            return {
+                "summary": "Mock summary",
+                "insights": ["Mock insight 1", "Mock insight 2"],
+                "data_quality_notes": ["Mock quality note"],
+                "recommended_actions": ["Mock action"],
+                "suggested_pipeline": [
+                    {"type": "sort", "params": {"columns": [{"column": "A", "ascending": True}]}}
+                ],
+            }
+
+        monkeypatch.setattr(ai_assistant, "analyze_data", _mock_analyze_data)
+
+        upload = client.post(
+            "/api/v1/upload-excel",
+            files={"file": ("test.xlsx", _make_excel_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        )
+        assert upload.status_code == 200
+        file_id = upload.json()["fileId"]
+
+        r = client.post(
+            "/api/v1/ai/analyze-data",
+            json={"fileId": file_id, "sheetName": "Sheet1", "userProfile": "student"},
+        )
+        assert r.status_code == 200
+        data = r.json()
+        assert data["success"] is True
+        assert "analysis" in data
+        assert data["analysis"]["summary"] == "Mock summary"
+
+    def test_ai_chat_endpoint_happy_path(self, monkeypatch):
+        def _mock_chat(_message: str, _data_context: dict) -> str:
+            return "Mock chat response"
+
+        monkeypatch.setattr(ai_assistant, "chat", _mock_chat)
+
+        r = client.post(
+            "/api/v1/ai/chat",
+            json={"message": "Hello", "dataContext": {"columns": ["A"], "rows": [{"A": 1}]}}
+        )
+        assert r.status_code == 200
+        data = r.json()
+        assert data["success"] is True
+        assert data["response"] == "Mock chat response"
+
+    def test_ai_explain_endpoint_503_when_openai_not_configured(self, monkeypatch):
+        def _mock_explain(_data_context: dict, _insight_type: str) -> str:
+            raise OpenAIConfigError("OPENAI_API_KEY is not configured")
+
+        monkeypatch.setattr(ai_assistant, "explain_insight", _mock_explain)
+
+        r = client.post(
+            "/api/v1/ai/explain-insight",
+            json={"dataContext": {"columns": ["A"], "data": []}, "insightType": "kpi"},
+        )
+        assert r.status_code == 503

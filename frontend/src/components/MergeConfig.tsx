@@ -11,7 +11,7 @@ import {
 } from '@/components/ui/select'
 import { Input } from '@/components/ui/input'
 import { GitMerge, Play } from 'lucide-react'
-import { excelApi, type MergeFilesRequest, type MergeFilesResponse, type UploadResponse } from '@/lib/api'
+import { excelApi, getApiErrorDetail, type MergeFilesRequest, type MergeFilesResponse, type UploadResponse } from '@/lib/api'
 
 interface MergeConfigProps {
   files: UploadResponse[]
@@ -45,9 +45,8 @@ export function MergeConfig({ files, onMergeSuccess, onError }: MergeConfigProps
 
       const result = await excelApi.mergeFiles(request)
       onMergeSuccess(result)
-    } catch (error: any) {
-      const errorMessage = error.response?.data?.detail || error.message || 'Merge failed'
-      onError?.(errorMessage)
+    } catch (error: unknown) {
+      onError?.(getApiErrorDetail(error))
     } finally {
       setIsMerging(false)
     }
@@ -67,7 +66,7 @@ export function MergeConfig({ files, onMergeSuccess, onError }: MergeConfigProps
       <CardContent className="space-y-4">
         <div>
           <Label htmlFor="strategy">Merge Strategy</Label>
-          <Select value={strategy} onValueChange={(value) => setStrategy(value as any)}>
+          <Select value={strategy} onValueChange={(value) => setStrategy(value as 'append' | 'join' | 'union')}>
             <SelectTrigger id="strategy">
               <SelectValue />
             </SelectTrigger>
@@ -97,7 +96,7 @@ export function MergeConfig({ files, onMergeSuccess, onError }: MergeConfigProps
             </div>
             <div>
               <Label htmlFor="join-type">Join Type</Label>
-              <Select value={joinType} onValueChange={(value) => setJoinType(value as any)}>
+              <Select value={joinType} onValueChange={(value) => setJoinType(value as 'inner' | 'left' | 'right' | 'outer')}>
                 <SelectTrigger id="join-type">
                   <SelectValue />
                 </SelectTrigger>

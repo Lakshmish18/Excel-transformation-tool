@@ -35,18 +35,59 @@ function formatDetail(detail: unknown): string {
       return (detail as { message: string }).message
     if ('msg' in detail && typeof (detail as { msg: unknown }).msg === 'string')
       return (detail as { msg: string }).msg
+    if ('detail' in detail && typeof (detail as { detail: unknown }).detail === 'string')
+      return (detail as { detail: string }).detail
     return JSON.stringify(detail)
   }
   return String(detail)
+}
+
+/** Ensure value is a displayable string (never [object Object]). */
+function toDisplayString(msg: unknown): string {
+  if (msg == null) return ''
+  if (typeof msg === 'string') return msg
+  if (typeof msg === 'object' && msg !== null) return formatDetail(msg)
+  return String(msg)
+}
+
+/**
+ * Extract a displayable error message from any caught error.
+ * Handles both FriendlyApiError (from API interceptor) and raw Axios/other errors.
+ * Use this in catch blocks instead of ad-hoc error parsing.
+ */
+export function getApiErrorDetail(error: unknown): string {
+  // FriendlyApiError from our interceptor
+  if (error && typeof error === 'object' && 'message' in error && typeof (error as FriendlyApiError).message === 'string') {
+    return (error as FriendlyApiError).message
+  }
+  // Raw Axios error
+  if (axios.isAxiosError(error)) {
+    const data = error.response?.data
+    // Blob response (e.g. exportTransform with responseType: 'blob')
+    if (data instanceof Blob && data.type?.includes('json')) {
+      return 'Download failed. Please try again.'
+    }
+    const rawDetail = data && typeof data === 'object' && 'detail' in data ? (data as { detail?: unknown }).detail : data
+    const msg = formatDetail(rawDetail) || (error.message ?? 'Request failed')
+    return msg || 'An error occurred'
+  }
+  if (error instanceof Error) return error.message
+  return toDisplayString(error) || 'An error occurred'
 }
 
 /** Parse API/axios errors into user-friendly messages. */
 export function parseError(error: unknown): FriendlyApiError {
   if (axios.isAxiosError(error)) {
     const status = error.response?.status
-    const data = error.response?.data as { message?: string; detail?: unknown } | undefined
-    const rawDetail = data?.detail
-    const serverMessage = data?.message ?? formatDetail(rawDetail) ?? (typeof data === 'string' ? data : '')
+    const data = error.response?.data
+    // Blob response (e.g. exportTransform): cannot parse, use generic message
+    if (data instanceof Blob) {
+      const msg = status && status >= 400 ? (status === 413 ? 'File too large' : status === 404 ? 'File not found' : 'Download failed. Please try again.') : 'Request failed'
+      return { message: msg, original: error }
+    }
+    const dataObj = data as { message?: string; detail?: unknown } | undefined
+    const rawDetail = dataObj?.detail
+    const serverMessage = dataObj?.message ?? formatDetail(rawDetail) ?? (typeof data === 'string' ? data : '')
     const msg = String(serverMessage || error.message || 'Request failed')
 
     if (error.code === 'ECONNABORTED' || error.message?.toLowerCase().includes('timeout')) {
@@ -59,13 +100,25 @@ export function parseError(error: unknown): FriendlyApiError {
       return { message: "The file or resource you're looking for doesn't exist.", original: error }
     }
     if (status === 500) {
-      return { message: 'Something went wrong on our end. Please try again.', original: error }
+      // Prefer server detail; also handle response body as plain string
+      let detailMsg = serverMessage || formatDetail(rawDetail)
+      if (!detailMsg && typeof data === 'string' && data.trim()) detailMsg = data
+      const message = toDisplayString(detailMsg) || 'Something went wrong on our end. Please try again.'
+      return { message, original: error }
     }
     if (status === 413) {
       return { message: 'This file is too large. Maximum size is 50MB.', original: error }
     }
+    if (status === 429) {
+      const retryAfter = error.response?.headers?.['retry-after'] || '60'
+      return {
+        message: `Rate limit exceeded. Please wait ${retryAfter} seconds and try again.`,
+        original: error,
+      }
+    }
     if (status === 422 || status === 400) {
-      return { message: serverMessage ? String(serverMessage) : 'Validation failed. Check your input.', original: error }
+      const message = toDisplayString(serverMessage) || 'Validation failed. Check your input.'
+      return { message, original: error }
     }
     return { message: msg || 'Request failed. Please try again.', original: error }
   }
@@ -77,7 +130,8 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     const friendly = parseError(error)
-    toast.error(friendly.message)
+    const message = typeof friendly.message === 'string' ? friendly.message : toDisplayString(friendly.message)
+    toast.error(message)
     return Promise.reject(friendly)
   }
 )
@@ -88,20 +142,38 @@ export interface UploadResponse {
   sheets: string[]
 }
 
+export interface DataQualityIssue {
+  severity: 'high' | 'medium'
+  column: string
+  message: string
+}
+
+export interface DataQuality {
+  overall_score: number
+  completeness: number
+  duplicate_rows: number
+  duplicate_percentage: number
+  total_rows: number
+  total_columns: number
+  issues: DataQualityIssue[]
+  column_quality?: Record<string, { nulls: number; null_percentage: number }>
+}
+
 export interface PreviewResponse {
   fileId: string
   sheetName: string
   columns: string[]
-  rows: Record<string, any>[]
+  rows: Record<string, unknown>[]
   headerRowIndex?: number
   warning?: string
+  quality?: DataQuality
 }
 
 export interface CellChange {
   rowIndex: number
   column: string
-  oldValue: any
-  newValue: any
+  oldValue: unknown
+  newValue: unknown
   operationIndex: number
   operationType: string
 }
@@ -119,7 +191,7 @@ export interface TransformResponse {
   fileId: string
   sheetName: string
   columns: string[]
-  rows: Record<string, any>[]
+  rows: Record<string, unknown>[]
   rowCountBefore: number
   rowCountAfter: number
   newColumns: string[]
@@ -139,6 +211,7 @@ export interface ApiError {
 export interface Operation {
   id?: string  // Optional: will be generated by backend if not provided
   type: 'filter' | 'replace' | 'math' | 'sort' | 'select_columns' | 'remove_duplicates' | 'aggregate' | 'text_cleanup' | 'split_column' | 'merge_columns' | 'date_format' | 'remove_blank_rows' | 'convert_to_numeric' | 'gross_profit' | 'net_profit' | 'profit_loss'
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Operation params vary by type; full typing deferred
   params: Record<string, any>
 }
 
@@ -191,6 +264,7 @@ export interface BatchTransformResult {
 export interface BatchTransformResponse {
   results: BatchTransformResult[]
   zipUrl?: string
+  zipId?: string
   errors?: Array<{ fileId: string; fileName: string; error: string }>
 }
 
@@ -227,7 +301,7 @@ export interface AnalysisSummary {
 
 export interface AnalyzeDataRequest {
   columns: string[]
-  rows: Record<string, any>[]
+  rows: Record<string, unknown>[]
 }
 
 export interface AnalyzeDataResponse {
@@ -236,20 +310,90 @@ export interface AnalyzeDataResponse {
   summary: AnalysisSummary
 }
 
+export interface AIAssistantAnalysis {
+  summary: string
+  insights: string[]
+  data_quality_notes: string[]
+  recommended_actions: string[]
+  suggested_pipeline: Operation[]
+}
+
+export interface AIAnalyzeDataRequest {
+  fileId: string
+  sheetName?: string
+  userProfile: string
+}
+
+export interface AIAnalyzeDataResponse {
+  success: boolean
+  analysis: AIAssistantAnalysis
+}
+
+export interface AIChatRequest {
+  message: string
+  dataContext: Record<string, unknown>
+}
+
+export interface AIChatResponse {
+  success: boolean
+  response: string
+}
+
+export interface AIExplainRequest {
+  dataContext: Record<string, unknown>
+  insightType: string
+}
+
+export interface AIExplainResponse {
+  success: boolean
+  explanation: string
+}
+
+export interface AISuggestNextStepRequest {
+  stage: string
+  dataSummary: Record<string, unknown>
+  currentPipeline: Operation[]
+  userProfile: string
+}
+
+export interface AISuggestNextStepResponse {
+  success: boolean
+  suggestion: string
+}
+
 export const excelApi = {
   /**
    * Upload Excel file and get sheet names
    */
   uploadFile: async (file: File): Promise<UploadResponse> => {
-    const formData = new FormData()
-    formData.append('file', file)
-    
-    const response = await api.post<UploadResponse>('/upload-excel', formData, {
-      headers: {
-        'Content-Type': 'multipart/form-data',
-      },
-    })
-    return response.data
+    const sendUpload = async (uploadFile: File): Promise<UploadResponse> => {
+      const formData = new FormData()
+      formData.append('file', uploadFile)
+      const response = await api.post<UploadResponse>('/upload-excel', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+      })
+      return response.data
+    }
+
+    try {
+      return await sendUpload(file)
+    } catch (error: unknown) {
+      // Graceful fallback: some CSV files are mislabeled as .xlsx by users/download sources.
+      const detail = getApiErrorDetail(error).toLowerCase()
+      const isLikelyMislabeledXlsx =
+        file.name.toLowerCase().endsWith('.xlsx') &&
+        detail.includes('does not appear to be a valid excel file')
+
+      if (!isLikelyMislabeledXlsx) {
+        throw error
+      }
+
+      const csvName = file.name.replace(/\.xlsx$/i, '.csv')
+      const csvLikeFile = new File([file], csvName, { type: 'text/csv' })
+      return await sendUpload(csvLikeFile)
+    }
   },
 
   /**
@@ -282,7 +426,7 @@ export const excelApi = {
     operations: Operation[],
     headerRowIndex?: number
   ): Promise<TransformResponse> => {
-    const payload: Record<string, any> = {
+    const payload: Record<string, unknown> = {
       fileId,
       sheetName,
       operations,
@@ -306,7 +450,7 @@ export const excelApi = {
     operations: Operation[],
     headerRowIndex?: number
   ): Promise<ValidatePipelineResponse> => {
-    const payload: Record<string, any> = {
+    const payload: Record<string, unknown> = {
       fileId,
       sheetName,
       operations,
@@ -355,6 +499,17 @@ export const excelApi = {
   },
 
   /**
+   * Download a batch transformation ZIP by ID
+   */
+  downloadBatchZip: async (zipId: string): Promise<Blob> => {
+    const response = await api.get(`/download-batch-zip`, {
+      params: { zipId },
+      responseType: 'blob',
+    })
+    return response.data as Blob
+  },
+
+  /**
    * Export transformed file
    */
   exportTransform: async (
@@ -363,7 +518,7 @@ export const excelApi = {
     operations: Operation[],
     headerRowIndex?: number
   ): Promise<Blob> => {
-    const payload: Record<string, any> = {
+    const payload: Record<string, unknown> = {
       fileId,
       sheetName,
       operations,
@@ -374,7 +529,9 @@ export const excelApi = {
     const response = await api.post(
       '/export-transform',
       payload,
-      { responseType: 'blob' }
+      // Export can be expensive (full DataFrame + styled Excel),
+      // so allow a larger timeout than the default axios instance.
+      { responseType: 'blob', timeout: 180000 }
     )
     return response.data
   },
@@ -384,6 +541,28 @@ export const excelApi = {
    */
   analyzeData: async (request: AnalyzeDataRequest): Promise<AnalyzeDataResponse> => {
     const response = await api.post<AnalyzeDataResponse>('/analyze-data', request)
+    return response.data
+  },
+}
+
+export const aiApi = {
+  analyzeData: async (request: AIAnalyzeDataRequest): Promise<AIAnalyzeDataResponse> => {
+    const response = await api.post<AIAnalyzeDataResponse>('/ai/analyze-data', request)
+    return response.data
+  },
+
+  chat: async (request: AIChatRequest): Promise<AIChatResponse> => {
+    const response = await api.post<AIChatResponse>('/ai/chat', request)
+    return response.data
+  },
+
+  explainInsight: async (request: AIExplainRequest): Promise<AIExplainResponse> => {
+    const response = await api.post<AIExplainResponse>('/ai/explain-insight', request)
+    return response.data
+  },
+
+  suggestNextStep: async (request: AISuggestNextStepRequest): Promise<AISuggestNextStepResponse> => {
+    const response = await api.post<AISuggestNextStepResponse>('/ai/suggest-next-step', request)
     return response.data
   },
 }

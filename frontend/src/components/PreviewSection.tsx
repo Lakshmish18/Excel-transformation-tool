@@ -14,10 +14,12 @@ import { SkeletonTable } from '@/components/skeletons'
 import { EditableTable } from '@/components/EditableTable'
 import { DataInsights } from '@/components/DataInsights'
 import { AutoCharts } from '@/components/AutoCharts'
+import { DataQualityCard } from '@/components/DataQualityCard'
 import { excelApi, type PreviewResponse, type TransformResponse } from '@/lib/api'
 import { PipelineBuilder } from '@/components/PipelineBuilder'
 import { OperationsPanel } from '@/components/OperationsPanel'
 import { toast } from 'sonner'
+import { logger } from '@/lib/logger'
 
 /** Normalize API error detail (string, object, or array) to a single display string. */
 function formatErrorDetail(detail: unknown): string {
@@ -45,9 +47,19 @@ interface PreviewSectionProps {
   initialSheet?: string
   /** Callback when sheet selection changes (e.g. sync to context) */
   onSheetChange?: (sheet: string) => void
+  /** Whether to show data quality card (profile-based) */
+  showDataQuality?: boolean
 }
 
-export function PreviewSection({ fileId, fileName, sheets, showOperationsPanel = false, initialSheet, onSheetChange }: PreviewSectionProps) {
+export function PreviewSection({
+  fileId,
+  fileName,
+  sheets,
+  showOperationsPanel = false,
+  initialSheet,
+  onSheetChange,
+  showDataQuality = true,
+}: PreviewSectionProps) {
   const [selectedSheet, setSelectedSheetState] = useState<string>(initialSheet || sheets[0] || '')
   const setSelectedSheet = (s: string) => {
     setSelectedSheetState(s)
@@ -79,13 +91,13 @@ export function PreviewSection({ fileId, fileName, sheets, showOperationsPanel =
     setPreviewData(null)
     setTransformData(null)
 
-    console.log('API call starting...', { fileId, sheetName: selectedSheet })
+    logger.debug('API call starting...', { fileId, sheetName: selectedSheet })
 
     excelApi
       .previewSheet(fileId, selectedSheet, 50)
       .then((response) => {
         if (!cancelled) {
-          console.log('Preview API response:', { 
+          logger.debug('Preview API response:', { 
             columns: response.columns?.length, 
             rows: response.rows?.length,
             sheetName: response.sheetName 
@@ -93,19 +105,22 @@ export function PreviewSection({ fileId, fileName, sheets, showOperationsPanel =
           setPreviewData(response)
         }
       })
-      .catch((err: any) => {
+      .catch((err: unknown) => {
         if (cancelled) return
-        const res = err.original?.response ?? err.response
-        const errorDetail = res?.data?.detail
-        const errObj = errorDetail && typeof errorDetail === 'object' && !Array.isArray(errorDetail) ? errorDetail : null
-        if (errObj && errObj.error_type === 'COLUMN_NOT_FOUND') {
-          const columnName = errObj.column_name || 'unknown'
-          const availableCols = errObj.available_columns || []
+        const errObj = err && typeof err === 'object'
+          ? (err as { original?: { response?: { data?: { detail?: unknown } } }; response?: { data?: { detail?: unknown } }; message?: string })
+          : { response: err }
+        const res = ('original' in errObj ? (errObj as { original?: { response?: unknown } }).original?.response : undefined) ?? ('response' in errObj ? (errObj as { response?: unknown }).response : err)
+        const errorDetail = res && typeof res === 'object' && 'data' in res ? (res as { data?: { detail?: unknown } }).data?.detail : undefined
+        const colErr = errorDetail && typeof errorDetail === 'object' && !Array.isArray(errorDetail) ? errorDetail as { error_type?: string; column_name?: string; available_columns?: string[] } : null
+        if (colErr && colErr.error_type === 'COLUMN_NOT_FOUND') {
+          const columnName = colErr.column_name || 'unknown'
+          const availableCols = colErr.available_columns || []
           setError(
             `The column '${columnName}' was not found. Available columns: ${availableCols.join(', ')}`
           )
         } else {
-          setError(formatErrorDetail(errorDetail) || err.message || 'Failed to load preview')
+          setError(formatErrorDetail(errorDetail) || (errObj && 'message' in errObj ? String(errObj.message) : '') || 'Failed to load preview')
         }
       })
       .finally(() => {
@@ -126,22 +141,23 @@ export function PreviewSection({ fileId, fileName, sheets, showOperationsPanel =
     setTransformData(null) // Clear transform data when loading new preview
 
     try {
-      console.log('API call starting... (button)', { fileId, sheetName: selectedSheet })
+      logger.debug('API call starting... (button)', { fileId, sheetName: selectedSheet })
       const response = await excelApi.previewSheet(fileId, selectedSheet, 10)
       setPreviewData(response)
       // Warning is shown separately, non-blocking
-    } catch (err: any) {
-      const res = err.original?.response ?? err.response
-      const errorDetail = res?.data?.detail
-      const errObj = errorDetail && typeof errorDetail === 'object' && !Array.isArray(errorDetail) ? errorDetail : null
-      if (errObj && errObj.error_type === 'COLUMN_NOT_FOUND') {
-        const columnName = errObj.column_name || 'unknown'
-        const availableCols = errObj.available_columns || []
+    } catch (err: unknown) {
+      const errObj = err && typeof err === 'object' ? (err as { original?: { response?: { data?: { detail?: unknown } } }; response?: { data?: { detail?: unknown } }; message?: string }) : { message: String(err) }
+      const res = errObj.original?.response ?? errObj.response
+      const errorDetail = res && typeof res === 'object' && 'data' in res ? (res as { data?: { detail?: unknown } }).data?.detail : undefined
+      const colErr = errorDetail && typeof errorDetail === 'object' && !Array.isArray(errorDetail) ? errorDetail as { error_type?: string; column_name?: string; available_columns?: string[] } : null
+      if (colErr && colErr.error_type === 'COLUMN_NOT_FOUND') {
+        const columnName = colErr.column_name || 'unknown'
+        const availableCols = colErr.available_columns || []
         setError(
           `The column '${columnName}' was not found. Available columns: ${availableCols.join(', ')}`
         )
       } else {
-        setError(formatErrorDetail(errorDetail) || err.message || 'Failed to load preview')
+        setError(formatErrorDetail(errorDetail) || errObj.message || 'Failed to load preview')
       }
     } finally {
       setIsLoading(false)
@@ -303,6 +319,13 @@ export function PreviewSection({ fileId, fileName, sheets, showOperationsPanel =
           </div>
         )}
 
+        {/* Data Quality Score */}
+        {!isLoading && previewData?.quality && showDataQuality && (
+          <div className="mt-6">
+            <DataQualityCard quality={previewData.quality} />
+          </div>
+        )}
+
         {/* Data Insights */}
         {!isLoading && previewData && (
           <div className="mt-6">
@@ -345,7 +368,7 @@ export function PreviewSection({ fileId, fileName, sheets, showOperationsPanel =
               editable={true}
               showSaveButton={true}
               maxHeight="600px"
-              onSave={(updatedRows: Record<string, any>[]) => {
+              onSave={(updatedRows: Record<string, unknown>[]) => {
                 // Update preview data with edited rows
                 setPreviewData({
                   ...previewData,

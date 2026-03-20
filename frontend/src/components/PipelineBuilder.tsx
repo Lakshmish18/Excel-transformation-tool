@@ -10,7 +10,7 @@ import {
 } from '@/components/ui/tooltip'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import {
-  Plus, CheckCircle2, XCircle, Loader2, Play, ShieldCheck, ArrowUp, ArrowDown, Edit, Trash2,
+  Plus, Sparkles, CheckCircle2, XCircle, Loader2, Play, ShieldCheck, ArrowUp, ArrowDown, Edit, Trash2,
   Undo2, Redo2, History, BookmarkPlus, FolderOpen, Download, Upload, MoreHorizontal,
   AlertTriangle,
 } from 'lucide-react'
@@ -20,8 +20,9 @@ import {
   validateOperation,
   type ValidationResult,
 } from '@/lib/operationValidator'
-import { excelApi, type Operation, type TransformResponse, type ValidatePipelineResponse } from '@/lib/api'
+import { excelApi, aiApi, getApiErrorDetail, type Operation, type TransformResponse, type ValidatePipelineResponse } from '@/lib/api'
 import { SkeletonPipeline } from '@/components/skeletons'
+import { TransformProgress } from '@/components/TransformProgress'
 import { OperationCategoryDialog } from '@/components/PipelineBuilder/OperationCategoryDialog'
 import { OperationConfigDialog } from '@/components/PipelineBuilder/OperationConfigDialog'
 import {
@@ -38,6 +39,7 @@ import {
   setCurrentDraft,
   clearCurrentDraft,
 } from '@/lib/storage'
+import { useAutoSave } from '@/hooks/useAutoSave'
 import { toast } from 'sonner'
 import {
   AlertDialog,
@@ -50,6 +52,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { cn } from '@/lib/utils'
+import { useProfile } from '@/context/ProfileContext'
 
 interface PipelineBuilderProps {
   fileId: string
@@ -58,6 +61,12 @@ interface PipelineBuilderProps {
   onTransformSuccess: (data: TransformResponse) => void
   onError?: (error: string) => void
   selectedOperationType?: string
+  /**
+   * Optional: when `seedKey` changes, the builder will replace its current pipeline
+   * with `seedOperations`. This is used for AI "Apply Suggested Pipeline".
+   */
+  seedOperations?: Operation[]
+  seedKey?: string | number
   /** Optional: notify parent when operations change (e.g. for batch mode) */
   onOperationsChange?: (operations: Operation[]) => void
   /** When true, hide Run & Preview button (parent handles execution, e.g. batch) */
@@ -84,6 +93,8 @@ export function PipelineBuilder({
   onTransformSuccess,
   onError,
   selectedOperationType: _selectedOperationType,
+  seedOperations,
+  seedKey,
   onOperationsChange,
   batchMode = false,
   initialOperations,
@@ -91,10 +102,14 @@ export function PipelineBuilder({
   const [historyState, dispatch] = useReducer(pipelineHistoryReducer, initialHistoryState)
   const operations = historyState.present
 
+  const { profile, config } = useProfile()
+
   const [editingIndex, setEditingIndex] = useState<number | null>(null)
   const [isValidating, setIsValidating] = useState(false)
   const [isRunning, setIsRunning] = useState(false)
   const [validationResult, setValidationResult] = useState<ValidatePipelineResponse | null>(null)
+  const [aiSuggestion, setAiSuggestion] = useState<string>('')
+  const [isAiSuggesting, setIsAiSuggesting] = useState(false)
 
   const [categoryDialogOpen, setCategoryDialogOpen] = useState(false)
   const [configDialogOpen, setConfigDialogOpen] = useState(false)
@@ -145,7 +160,7 @@ export function PipelineBuilder({
         : op.params.colBOrValue
       return `${op.params.colA} ${symbol} ${colB} → ${op.params.newColumn}`
     } else if (op.type === 'sort') {
-      const cols = op.params.columns.map((c: any) => `${c.column} ${c.ascending ? '↑' : '↓'}`).join(', ')
+      const cols = (op.params.columns as { column: string; ascending: boolean }[]).map((c) => `${c.column} ${c.ascending ? '↑' : '↓'}`).join(', ')
       return `Sort by: ${cols}`
     } else if (op.type === 'select_columns') {
       return `Select columns: ${op.params.columns.join(', ')}`
@@ -178,6 +193,62 @@ export function PipelineBuilder({
     }
     return `${op.type} operation`
   }
+
+  // If AI (or other flows) wants to replace the current pipeline after mount,
+  // do it when `seedKey` changes.
+  const lastSeedKeyRef = useRef<string | number | undefined>(undefined)
+  useEffect(() => {
+    if (seedKey === undefined) return
+    if (lastSeedKeyRef.current === seedKey) return
+    lastSeedKeyRef.current = seedKey
+
+    const nextOps = seedOperations ?? []
+    const pipelineOps = nextOps.length ? opsToPipelineOps(nextOps, generateSummary) : []
+
+    if (nextOps.length) {
+      dispatch({ type: 'LOAD_PIPELINE', operations: pipelineOps })
+    } else {
+      dispatch({ type: 'CLEAR_PIPELINE' })
+    }
+
+    setValidationResult(null)
+    setEditingIndex(null)
+  }, [seedKey, seedOperations, columns])
+
+  // AI suggestion banner (debounced).
+  useEffect(() => {
+    if (!config.features.showAutoAnalysis) return
+    if (batchMode) return
+    if (columns.length === 0) return
+
+    if (operations.length === 0) {
+      setAiSuggestion('')
+      return
+    }
+
+    const t = window.setTimeout(async () => {
+      try {
+        setIsAiSuggesting(true)
+        const res = await aiApi.suggestNextStep({
+          stage: 'pipeline_building',
+          dataSummary: { columns },
+          currentPipeline: toApiOperations(operations),
+          userProfile: profile,
+        })
+        setAiSuggestion(res.suggestion || '')
+      } catch (err: unknown) {
+        // Keep it quiet; the rest of the UI already provides inline error handling.
+        if (import.meta.env.DEV) console.warn('AI suggest failed:', err)
+        setAiSuggestion('')
+      } finally {
+        setIsAiSuggesting(false)
+      }
+    }, 800)
+
+    return () => {
+      window.clearTimeout(t)
+    }
+  }, [operations, columns, config.features.showAutoAnalysis, batchMode, profile])
 
   const firstErrorCardRef = useRef<HTMLDivElement>(null)
 
@@ -302,12 +373,26 @@ export function PipelineBuilder({
   }, [initialOperations, columns])
 
 
-  // Auto-save draft (debounce 1s)
+  // Auto-save draft (immediate debounce 1s for quick persistence)
   useEffect(() => {
     if (operations.length === 0) return
     const t = setTimeout(() => setCurrentDraft(toApiOperations(operations)), 1000)
     return () => clearTimeout(t)
   }, [operations])
+
+  // Auto-save with 30s delay and toast feedback
+  useAutoSave({
+    data: toApiOperations(operations),
+    onSave: (ops) => {
+      const opsArr = ops as import('@/lib/api').Operation[]
+      if (opsArr?.length) {
+        setCurrentDraft(opsArr)
+        toast.success('Pipeline auto-saved', { duration: 1000 })
+      }
+    },
+    delay: 30000,
+    enabled: operations.length > 0,
+  })
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -463,10 +548,8 @@ export function PipelineBuilder({
           .join('\n')
         onError?.(errorMessages)
       }
-    } catch (err: any) {
-      const raw = err.response?.data?.detail ?? err.message ?? 'Validation failed'
-      const errorDetail = typeof raw === 'string' ? raw : JSON.stringify(raw)
-      onError?.(errorDetail)
+    } catch (err: unknown) {
+      onError?.(getApiErrorDetail(err))
     } finally {
       setIsValidating(false)
     }
@@ -492,25 +575,8 @@ export function PipelineBuilder({
       const response = await excelApi.previewTransform(fileId, sheetName, ops)
       clearCurrentDraft()
       onTransformSuccess(response)
-    } catch (err: any) {
-      const errorDetail = err.response?.data?.detail
-      if (errorDetail && typeof errorDetail === 'object') {
-        if (errorDetail.error_type === 'COLUMN_NOT_FOUND') {
-          const columnName = errorDetail.column_name || 'unknown'
-          const availableCols = errorDetail.available_columns || []
-          onError?.(
-            `The column '${columnName}' was not found. Available columns: ${availableCols.join(', ')}`
-          )
-        } else if (errorDetail.error_type === 'OPERATION_VALIDATION_ERROR') {
-          onError?.(
-            `Operation ${errorDetail.operation_index + 1} (${errorDetail.operation_type}): ${errorDetail.message}`
-          )
-        } else {
-          onError?.(errorDetail.message || errorDetail.detail || 'Transformation failed')
-        }
-      } else {
-        onError?.(errorDetail || err.message || 'Transformation failed')
-      }
+    } catch (err: unknown) {
+      onError?.(getApiErrorDetail(err))
     } finally {
       setIsRunning(false)
     }
@@ -535,6 +601,19 @@ export function PipelineBuilder({
         </CardHeader>
         <CardContent>
           <div className="space-y-4">
+            {config.features.showAutoAnalysis && !batchMode && (aiSuggestion || isAiSuggesting) && (
+              <div className="p-3 bg-sky-50 border border-sky-200 rounded-lg flex items-start gap-2">
+                <Sparkles className="h-5 w-5 text-sky-600 mt-0.5" />
+                <div>
+                  <p className="text-sm font-semibold text-sky-900">
+                    AI Suggestion
+                  </p>
+                  <p className="text-sm text-sky-800">
+                    {isAiSuggesting ? 'Thinking...' : aiSuggestion}
+                  </p>
+                </div>
+              </div>
+            )}
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h3 className="text-lg font-semibold">
                 Current Pipeline ({operations.length})
@@ -670,7 +749,14 @@ export function PipelineBuilder({
               </TooltipProvider>
             </div>
 
-              {isValidating || isRunning ? (
+              {isRunning ? (
+                <TransformProgress
+                  totalSteps={operations.length}
+                  currentStep={operations.length}
+                  currentOperation="Applying transformations..."
+                  status="running"
+                />
+              ) : isValidating ? (
                 <SkeletonPipeline cards={3} />
               ) : operations.length === 0 ? (
                 <div className="p-8 text-center text-muted-foreground border rounded-md">

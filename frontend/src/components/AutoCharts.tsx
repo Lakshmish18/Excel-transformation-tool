@@ -25,13 +25,13 @@ import { excelApi, type VisualizationSuggestion } from '@/lib/api'
 
 interface AutoChartsProps {
   columns: string[]
-  rows: Record<string, any>[]
+  rows: Record<string, unknown>[]
 }
 
 interface ChartData {
   type: VisualizationSuggestion['type']
   title: string
-  data: any[]
+  data: unknown[]
   x?: string
   y?: string
   category?: string
@@ -144,7 +144,7 @@ export function AutoCharts({ columns, rows }: AutoChartsProps) {
             generatedCharts.push(chartData)
           }
         } catch (err) {
-          console.warn(`Failed to generate chart for ${viz.type}:`, err)
+          if (import.meta.env.DEV) console.warn(`Failed to generate chart for ${viz.type}:`, err)
         }
       }
 
@@ -158,25 +158,25 @@ export function AutoCharts({ columns, rows }: AutoChartsProps) {
   }
 
   const aggregateData = (
-    rows: Record<string, any>[],
+    rows: Record<string, unknown>[],
     categoryCol: string,
     valueCol: string
   ): Array<{ name: string; value: number }> => {
-    const grouped = rows.reduce((acc, row) => {
+    const grouped = rows.reduce((acc: Record<string, number>, row: Record<string, unknown>) => {
       const cat = String(row[categoryCol] ?? 'Unknown')
       if (!acc[cat]) acc[cat] = 0
       acc[cat] += Number(row[valueCol]) || 0
       return acc
     }, {} as Record<string, number>)
 
-    return Object.entries(grouped)
+    return (Object.entries(grouped) as [string, number][])
       .map(([name, value]) => ({ name, value }))
       .sort((a, b) => b.value - a.value)
       .slice(0, 20) // Limit to top 20 categories
   }
 
   const createHistogramData = (
-    rows: Record<string, any>[],
+    rows: Record<string, unknown>[],
     column: string
   ): Array<{ name: string; value: number }> => {
     const values = rows

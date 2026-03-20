@@ -10,7 +10,7 @@ import { cn } from '@/lib/utils'
 
 interface DataInsightsProps {
   columns: string[]
-  rows: Record<string, any>[]
+  rows: Record<string, unknown>[]
   /** Show summary statistics */
   showSummary?: boolean
 }

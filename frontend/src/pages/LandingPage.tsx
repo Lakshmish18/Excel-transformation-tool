@@ -33,6 +33,7 @@ import { InteractiveDemo } from '@/components/InteractiveDemo'
 import { getRecentTransformations, clearRecentTransformations } from '@/lib/storage'
 import { loadPipelines, type SavedPipeline } from '@/lib/supabase-pipelines'
 import type { RecentTransformation } from '@/lib/storage'
+import { useProfile } from '@/context/ProfileContext'
 
 const heroContainerVariants = {
   hidden: { opacity: 0 },
@@ -55,6 +56,7 @@ export function LandingPage() {
   const { scrollY } = useScroll()
   const heroY = useTransform(scrollY, [0, 300], [0, 80])
   const { ref: statsRef, inView: statsInView } = useInView({ threshold: 0.3, triggerOnce: true })
+  const { config } = useProfile()
 
   useEffect(() => {
     setRecent(getRecentTransformations())
@@ -217,45 +219,49 @@ export function LandingPage() {
             </Card>
           </Link>
 
-          <Link to="/upload/batch" className="block transition-transform hover:scale-[1.02]">
-            <Card className="h-full border-2 border-transparent shadow-sm transition-all hover:border-primary hover:shadow-md">
-              <CardHeader className="space-y-2 pb-2">
-                <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-primary/10">
-                  <Zap className="h-6 w-6 text-primary" />
-                </div>
-                <CardTitle className="text-xl">Batch Process Files</CardTitle>
-                <CardDescription>
-                  Apply the same transformation pipeline to multiple files and download as ZIP.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="pt-0">
-                <Button variant="outline" className="w-full gap-2" size="lg">
-                  Get started
-                  <ArrowRight className="h-4 w-4" />
-                </Button>
-              </CardContent>
-            </Card>
-          </Link>
+          {config.features.showBatchProcessing && (
+            <Link to="/upload/batch" className="block transition-transform hover:scale-[1.02]">
+              <Card className="h-full border-2 border-transparent shadow-sm transition-all hover:border-primary hover:shadow-md">
+                <CardHeader className="space-y-2 pb-2">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-primary/10">
+                    <Zap className="h-6 w-6 text-primary" />
+                  </div>
+                  <CardTitle className="text-xl">Batch Process Files</CardTitle>
+                  <CardDescription>
+                    Apply the same transformation pipeline to multiple files and download as ZIP.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="pt-0">
+                  <Button variant="outline" className="w-full gap-2" size="lg">
+                    Get started
+                    <ArrowRight className="h-4 w-4" />
+                  </Button>
+                </CardContent>
+              </Card>
+            </Link>
+          )}
 
-          <Link to="/upload/merge" className="block transition-transform hover:scale-[1.02]">
-            <Card className="h-full border-2 border-transparent shadow-sm transition-all hover:border-primary hover:shadow-md">
-              <CardHeader className="space-y-2 pb-2">
-                <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-primary/10">
-                  <Merge className="h-6 w-6 text-primary" />
-                </div>
-                <CardTitle className="text-xl">Merge Multiple Files</CardTitle>
-                <CardDescription>
-                  Append, join, or union multiple Excel files into one.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="pt-0">
-                <Button variant="outline" className="w-full gap-2" size="lg">
-                  Get started
-                  <ArrowRight className="h-4 w-4" />
-                </Button>
-              </CardContent>
-            </Card>
-          </Link>
+          {config.features.showMergeFiles && (
+            <Link to="/upload/merge" className="block transition-transform hover:scale-[1.02]">
+              <Card className="h-full border-2 border-transparent shadow-sm transition-all hover:border-primary hover:shadow-md">
+                <CardHeader className="space-y-2 pb-2">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-primary/10">
+                    <Merge className="h-6 w-6 text-primary" />
+                  </div>
+                  <CardTitle className="text-xl">Merge Multiple Files</CardTitle>
+                  <CardDescription>
+                    Append, join, or union multiple Excel files into one.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="pt-0">
+                  <Button variant="outline" className="w-full gap-2" size="lg">
+                    Get started
+                    <ArrowRight className="h-4 w-4" />
+                  </Button>
+                </CardContent>
+              </Card>
+            </Link>
+          )}
         </div>
 
         {/* Social proof / compatibility */}

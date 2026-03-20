@@ -168,7 +168,8 @@ Excel-transformation-tool/
 │   │   ├── transform_engine.py
 │   │   └── main.py          # FastAPI app, CORS
 │   ├── requirements.txt
-│   ├── .python-version      # 3.11 for Render
+│   ├── railway.json         # Railway deployment config
+│   ├── Procfile             # Process command for Railway
 │   └── uploads/             # Temporary uploads (gitignored)
 ├── frontend/
 │   ├── src/
@@ -182,8 +183,7 @@ Excel-transformation-tool/
 ├── scripts/
 │   ├── start-backend.js     # Used by npm start
 │   └── run-browser.ps1       # Windows: start both + open browser
-├── render.yaml              # Render.com backend blueprint
-├── DEPLOY.md                # Deploy to Vercel + Render
+├── DEPLOYMENT.md            # Deploy to Vercel + Railway
 └── README.md                # This file
 ```
 
@@ -210,11 +210,11 @@ Interactive API docs when backend is running: **http://localhost:8000/docs**
 
 ## Deployment
 
-To deploy the app for free (frontend on Vercel, backend on Render), follow **[DEPLOY.md](DEPLOY.md)**. It covers:
+To deploy the app (frontend on Vercel, backend on Railway), follow **[DEPLOYMENT.md](DEPLOYMENT.md)**. It covers:
 
-1. Deploying the backend on Render  
+1. Deploying the backend on Railway  
 2. Deploying the frontend on Vercel  
-3. Setting CORS and Supabase redirect URLs  
+3. Setting CORS (`ALLOWED_ORIGINS`) and optional Supabase redirect URLs  
 4. Verifying the live app  
 
 ---

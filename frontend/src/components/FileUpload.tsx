@@ -4,6 +4,9 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Upload, FileSpreadsheet, X } from 'lucide-react'
 import { excelApi, type UploadResponse } from '@/lib/api'
+import { toast } from 'sonner'
+import { getApiErrorDetail } from '@/lib/api'
+import { useProfile } from '@/context/ProfileContext'
 
 interface FileUploadProps {
   onUploadSuccess: (data: UploadResponse) => void
@@ -14,20 +17,44 @@ export function FileUpload({ onUploadSuccess, onError }: FileUploadProps) {
   const [isUploading, setIsUploading] = useState(false)
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const { config } = useProfile()
+
+  const MAX_FILE_SIZE = config.features.maxFileSize * 1024 * 1024
+
+  const validateFile = (file: File): string | null => {
+    const validExtensions = ['.xlsx', '.csv']
+    const ext = file.name.toLowerCase().slice(file.name.lastIndexOf('.'))
+    if (!validExtensions.includes(ext)) {
+      return 'Only .xlsx and .csv files are supported'
+    }
+    if (file.size > MAX_FILE_SIZE) {
+      return `File too large. Your profile allows up to ${config.features.maxFileSize}MB`
+    }
+    return null
+  }
 
   const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
     if (file) {
-      if (file.name.endsWith('.xlsx') || file.name.endsWith('.xls')) {
-        setSelectedFile(file)
-      } else {
-        onError?.('Please select an Excel file (.xlsx or .xls)')
+      const err = validateFile(file)
+      if (err) {
+        toast.error(err)
+        onError?.(err)
+        return
       }
+      setSelectedFile(file)
     }
   }
 
   const handleUpload = async () => {
     if (!selectedFile) return
+
+    const err = validateFile(selectedFile)
+    if (err) {
+      toast.error(err)
+      onError?.(err)
+      return
+    }
 
     setIsUploading(true)
     try {
@@ -37,9 +64,8 @@ export function FileUpload({ onUploadSuccess, onError }: FileUploadProps) {
       if (fileInputRef.current) {
         fileInputRef.current.value = ''
       }
-    } catch (error: any) {
-      const errorMessage = error.response?.data?.detail || error.message || 'Upload failed'
-      onError?.(errorMessage)
+    } catch (error: unknown) {
+      onError?.(getApiErrorDetail(error))
     } finally {
       setIsUploading(false)
     }
@@ -60,7 +86,7 @@ export function FileUpload({ onUploadSuccess, onError }: FileUploadProps) {
           Upload Excel File
         </CardTitle>
         <CardDescription>
-          Select an Excel file (.xlsx or .xls) to get started
+          Select an Excel (.xlsx) or CSV file (max 50MB) to get started
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -68,7 +94,7 @@ export function FileUpload({ onUploadSuccess, onError }: FileUploadProps) {
           <input
             ref={fileInputRef}
             type="file"
-            accept=".xlsx,.xls"
+            accept=".xlsx,.csv"
             onChange={handleFileSelect}
             className="hidden"
             id="file-upload"

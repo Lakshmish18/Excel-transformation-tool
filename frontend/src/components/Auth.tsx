@@ -14,7 +14,7 @@ export function Auth() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
-  const [user, setUser] = useState<any>(null)
+  const [user, setUser] = useState<{ id: string; email?: string } | null>(null)
   const [isSignUp, setIsSignUp] = useState(false)
 
   useEffect(() => {

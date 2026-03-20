@@ -2,6 +2,7 @@
  * Supabase functions for transformation history
  */
 import { supabase, type TransformationHistory, getCurrentUserId, isSupabaseConfigured } from './supabase'
+import { logger } from './logger'
 import { toast } from 'sonner'
 import type { Operation } from './api'
 
@@ -21,7 +22,7 @@ export async function saveTransformationHistory(
 ): Promise<TransformationHistory | null> {
   // Skip if Supabase not configured
   if (!isSupabaseConfigured() || !supabase) {
-    console.log('Supabase not configured, skipping history save')
+    logger.debug('Supabase not configured, skipping history save')
     return null
   }
 
@@ -29,7 +30,7 @@ export async function saveTransformationHistory(
     const userId = await getCurrentUserId()
     if (!userId) {
       // Not signed in, skip saving history
-      console.log('User not signed in, skipping history save')
+      logger.debug('User not signed in, skipping history save')
       return null
     }
 
@@ -53,14 +54,14 @@ export async function saveTransformationHistory(
       .single()
 
     if (error) {
-      console.error('Save history error:', error)
+      logger.error('Save history error:', error)
       // Don't show error toast - history is non-critical
       return null
     }
 
     return data
   } catch (error) {
-    console.error('Save history exception:', error)
+    logger.error('Save history exception:', error)
     return null
   }
 }
@@ -88,13 +89,13 @@ export async function loadTransformationHistory(limit: number = 50): Promise<Tra
       .limit(limit)
 
     if (error) {
-      console.error('Load history error:', error)
+      logger.error('Load history error:', error)
       return []
     }
 
     return data || []
   } catch (error) {
-    console.error('Load history exception:', error)
+    logger.error('Load history exception:', error)
     return []
   }
 }
@@ -120,7 +121,7 @@ export async function deleteTransformationHistory(historyId: string): Promise<bo
       .eq('user_id', userId)
 
     if (error) {
-      console.error('Delete history error:', error)
+      logger.error('Delete history error:', error)
       toast.error('Failed to delete history record')
       return false
     }
@@ -128,7 +129,7 @@ export async function deleteTransformationHistory(historyId: string): Promise<bo
     toast.success('History record deleted')
     return true
   } catch (error) {
-    console.error('Delete history exception:', error)
+    logger.error('Delete history exception:', error)
     return false
   }
 }

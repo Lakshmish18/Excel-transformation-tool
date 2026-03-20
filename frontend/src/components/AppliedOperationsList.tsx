@@ -54,7 +54,7 @@ export function AppliedOperationsList({
         : op.params.colBOrValue
       return `${op.params.colA} ${symbol} ${colB} → ${op.params.newColumn}`
     } else if (op.type === 'sort') {
-      const cols = op.params.columns.map((c: any) => `${c.column} ${c.ascending ? '↑' : '↓'}`).join(', ')
+      const cols = (op.params.columns as { column: string; ascending: boolean }[]).map((c) => `${c.column} ${c.ascending ? '↑' : '↓'}`).join(', ')
       return `Sort by: ${cols}`
     } else if (op.type === 'select_columns') {
       return `Select columns: ${op.params.columns.join(', ')}`

@@ -71,7 +71,7 @@ function getDefaultParams(type: string, columns: string[]): Record<string, unkno
 
 function buildOperationFromParams(type: string, params: Record<string, unknown>): Operation | null {
   switch (type) {
-    case 'filter':
+    case 'filter': {
       if (!params.column || params.value === '') return null
       const val = params.value
       return {
@@ -82,6 +82,7 @@ function buildOperationFromParams(type: string, params: Record<string, unknown>)
           value: typeof val === 'string' && !isNaN(Number(val)) ? Number(val) : val,
         },
       }
+    }
     case 'replace':
       if (!params.column) return null
       return {
@@ -92,7 +93,7 @@ function buildOperationFromParams(type: string, params: Record<string, unknown>)
           newValue: params.newValue ?? '',
         },
       }
-    case 'math':
+    case 'math': {
       if (!params.operation || !params.colA || (params.colBOrValue as string) === '' || !params.newColumn) return null
       const bOrVal = params.colBOrValue
       return {
@@ -104,6 +105,7 @@ function buildOperationFromParams(type: string, params: Record<string, unknown>)
           newColumn: params.newColumn,
         },
       }
+    }
     case 'sort':
       if (!params.column) return null
       return {
@@ -226,10 +228,11 @@ function summaryFromOperation(op: Operation): string {
       return `${p.column} by "${p.separator}" → ${(p.newColumns as string[]).join(', ')}`
     case 'merge_columns':
       return `${(p.columns as string[]).join(', ')} → ${p.newColumn}`
-    case 'aggregate':
+    case 'aggregate': {
       const agg = p.aggregations as Record<string, string>
       const aggs = Object.entries(agg).map(([c, o]) => `${c}: ${o}`).join(', ')
       return (p.groupBy as string[]).length ? `Group by ${(p.groupBy as string[]).join(', ')} → ${aggs}` : aggs
+    }
     case 'gross_profit':
       return `${p.revenueColumn} - ${p.costOfGoodsSoldColumn} → ${p.newColumn}`
     case 'net_profit':

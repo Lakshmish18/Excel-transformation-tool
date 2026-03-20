@@ -7,10 +7,8 @@ import { Badge } from '@/components/ui/badge'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Upload, FileSpreadsheet, X, CheckCircle2, AlertCircle } from 'lucide-react'
 import { HelpTooltip } from '@/components/HelpTooltip'
-import { excelApi, type UploadResponse, type MultipleUploadResponse } from '@/lib/api'
-
-const MAX_FILE_SIZE_MB = 50
-const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
+import { excelApi, getApiErrorDetail, type UploadResponse, type MultipleUploadResponse } from '@/lib/api'
+import { useProfile } from '@/context/ProfileContext'
 
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
@@ -31,6 +29,9 @@ export function UploadSection({
   onError,
   allowMultiple = false,
 }: UploadSectionProps) {
+  const { config } = useProfile()
+  const MAX_FILE_SIZE_MB = config.features.maxFileSize
+  const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
   const [isUploading, setIsUploading] = useState(false)
   const [uploadProgress, setUploadProgress] = useState(0)
   const [selectedFiles, setSelectedFiles] = useState<File[]>([])
@@ -42,20 +43,23 @@ export function UploadSection({
     (files: FileList | File[]) => {
       setValidationError(null)
       const fileArray = Array.from(files)
-      const validFiles = fileArray.filter((f) => f.name.endsWith('.xlsx'))
+      const validFiles = fileArray.filter((f) => {
+        const lower = f.name.toLowerCase()
+        return lower.endsWith('.xlsx') || lower.endsWith('.csv')
+      })
       const invalidCount = fileArray.length - validFiles.length
       if (invalidCount > 0) {
-        setValidationError(`Only .xlsx files are supported. ${invalidCount} file(s) skipped.`)
+        setValidationError(`Only .xlsx and .csv files are supported. ${invalidCount} file(s) skipped.`)
       }
       const oversized = validFiles.filter((f) => f.size > MAX_FILE_SIZE_BYTES)
       if (oversized.length > 0) {
         setValidationError(
-          `Some files exceed ${MAX_FILE_SIZE_MB}MB and may be slow to process: ${oversized.map((f) => f.name).join(', ')}`
+          `Some files exceed your ${MAX_FILE_SIZE_MB}MB profile limit: ${oversized.map((f) => f.name).join(', ')}`
         )
       }
       const toAdd = validFiles
       if (toAdd.length === 0 && fileArray.length > 0) {
-        setValidationError('Please select Excel files (.xlsx)')
+        setValidationError('Please select Excel or CSV files (.xlsx, .csv)')
         return
       }
       if (allowMultiple) {
@@ -113,12 +117,7 @@ export function UploadSection({
         }
       }
     } catch (error: unknown) {
-      const errorMessage =
-        error && typeof error === 'object' && 'response' in error
-          ? String((error as { response?: { data?: { detail?: string } } }).response?.data?.detail || 'Upload failed')
-          : error instanceof Error
-            ? error.message
-            : 'Upload failed'
+      const errorMessage = getApiErrorDetail(error) || 'Upload failed'
       onError?.(errorMessage)
       setValidationError(errorMessage)
     } finally {
@@ -153,8 +152,8 @@ export function UploadSection({
         </CardTitle>
         <CardDescription>
           {allowMultiple
-            ? 'Select or drag and drop one or more Excel files (.xlsx). Max 50MB per file.'
-            : 'Select or drag and drop one Excel file (.xlsx). Max 50MB.'}
+            ? `Select or drag and drop one or more files (.xlsx, .csv). Max ${MAX_FILE_SIZE_MB}MB per file.`
+            : `Select or drag and drop one file (.xlsx, .csv). Max ${MAX_FILE_SIZE_MB}MB.`}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6 p-6">
@@ -220,7 +219,7 @@ export function UploadSection({
               <input
                 ref={fileInputRef}
                 type="file"
-                accept=".xlsx"
+                accept=".xlsx,.csv"
                 multiple={allowMultiple}
                 onChange={handleFileInputChange}
                 className="hidden"

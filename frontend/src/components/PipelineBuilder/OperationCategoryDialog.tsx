@@ -2,7 +2,7 @@
  * Progressive disclosure: category selection → operation selection.
  * User picks a category, then an operation, then "Configure" opens the config dialog.
  */
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import {
   Dialog,
   DialogContent,
@@ -17,6 +17,7 @@ import { ChevronLeft } from 'lucide-react'
 import { OPERATION_CATEGORIES, OPERATION_HELP, type CategoryDef } from './operationsConfig'
 import { HelpTooltip } from '@/components/HelpTooltip'
 import { cn } from '@/lib/utils'
+import { useProfile } from '@/context/ProfileContext'
 
 interface OperationCategoryDialogProps {
   open: boolean
@@ -30,6 +31,20 @@ export function OperationCategoryDialog({
   onSelectOperation,
 }: OperationCategoryDialogProps) {
   const [selectedCategory, setSelectedCategory] = useState<CategoryDef | null>(null)
+  const { config } = useProfile()
+
+  const filteredCategories = useMemo(() => {
+    if (config.features.showAdvancedOperations) {
+      return OPERATION_CATEGORIES
+    }
+    const allowed = new Set(config.features.recommendedOperations)
+    return OPERATION_CATEGORIES
+      .map((cat) => ({
+        ...cat,
+        operations: cat.operations.filter((op) => allowed.has(op.type)),
+      }))
+      .filter((cat) => cat.operations.length > 0)
+  }, [config])
 
   const handleBack = () => setSelectedCategory(null)
 
@@ -79,7 +94,7 @@ export function OperationCategoryDialog({
 
         {!selectedCategory ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 py-2">
-            {OPERATION_CATEGORIES.map((cat) => {
+            {filteredCategories.map((cat) => {
               const Icon = cat.icon
               return (
                 <Card

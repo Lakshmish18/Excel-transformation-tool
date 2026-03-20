@@ -1,5 +1,5 @@
 """
-Utility module for robust Excel file loading with automatic header detection.
+Utility module for robust Excel and CSV file loading with automatic header detection.
 Handles files with intro rows, multiple header rows, or junk rows at the top.
 """
 import pandas as pd
@@ -137,4 +137,77 @@ def load_excel_with_header_detection(
                   for i, col in enumerate(df.columns)]
     
     return df, detected_row, warning
+
+
+def load_csv_with_header_detection(
+    file_path: Path,
+    header_row_index: Optional[int] = None,
+    nrows: Optional[int] = None
+) -> Tuple[pd.DataFrame, int, Optional[str]]:
+    """
+    Load a CSV file with automatic or explicit header row detection.
+    
+    Args:
+        file_path: Path to the CSV file
+        header_row_index: Optional explicit header row index (0-based). If None, auto-detect.
+        nrows: Optional limit on number of data rows to read (for preview)
+    
+    Returns:
+        Tuple of (DataFrame, detected_header_row_index, warning_message)
+    """
+    try:
+        df_raw = pd.read_csv(file_path, header=None, nrows=20, encoding='utf-8')
+    except UnicodeDecodeError:
+        raise ValueError("Invalid CSV encoding. Use UTF-8.")
+    except Exception as e:
+        raise ValueError(f"Error reading CSV file: {str(e)}")
+    
+    warning = None
+    
+    if header_row_index is not None:
+        if header_row_index < 0 or header_row_index >= len(df_raw):
+            raise ValueError(f"Header row index {header_row_index} is out of range.")
+        detected_row = header_row_index
+    else:
+        detected_row, warning = detect_header_row(df_raw)
+    
+    skiprows = list(range(detected_row)) if detected_row > 0 else None
+    
+    try:
+        df = pd.read_csv(
+            file_path,
+            header=0,
+            skiprows=skiprows,
+            nrows=nrows,
+            encoding='utf-8'
+        )
+    except Exception as e:
+        raise ValueError(f"Error reading CSV: {str(e)}")
+    
+    df.columns = [str(col).strip() if pd.notna(col) else f"Column_{i}"
+                  for i, col in enumerate(df.columns)]
+    
+    return df, detected_row, warning
+
+
+def load_file_with_header_detection(
+    file_path: Path,
+    sheet_name: Optional[str] = None,
+    header_row_index: Optional[int] = None,
+    nrows: Optional[int] = None
+) -> Tuple[pd.DataFrame, int, Optional[str]]:
+    """
+    Load Excel or CSV file with header detection. Dispatches based on file extension.
+    """
+    ext = file_path.suffix.lower()
+    if ext == '.csv':
+        return load_csv_with_header_detection(file_path, header_row_index, nrows)
+    if ext in ('.xlsx', '.xls'):
+        return load_excel_with_header_detection(
+            file_path,
+            sheet_name=sheet_name or 'Sheet1',
+            header_row_index=header_row_index,
+            nrows=nrows
+        )
+    raise ValueError(f"Unsupported file type: {ext}")
 

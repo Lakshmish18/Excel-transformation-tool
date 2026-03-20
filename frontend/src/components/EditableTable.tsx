@@ -12,8 +12,8 @@ import { cn } from '@/lib/utils'
 
 interface EditableTableProps {
   columns: string[]
-  rows: Record<string, any>[]
-  onSave?: (updatedRows: Record<string, any>[]) => void
+  rows: Record<string, unknown>[]
+  onSave?: (updatedRows: Record<string, unknown>[]) => void
   /** Enable editing mode (default: true) */
   editable?: boolean
   /** Show save button (default: true) */
@@ -30,7 +30,7 @@ export function EditableTable({
   showSaveButton = true,
   maxHeight = '600px',
 }: EditableTableProps) {
-  const [data, setData] = useState<Record<string, any>[]>(initialRows)
+  const [data, setData] = useState<Record<string, unknown>[]>(initialRows)
   const [editingCell, setEditingCell] = useState<{ row: number; col: string } | null>(null)
   const [editValue, setEditValue] = useState('')
   const [hasChanges, setHasChanges] = useState(false)
@@ -66,7 +66,7 @@ export function EditableTable({
     
     // Preserve original value type if possible
     const originalValue = data[editingCell.row]?.[editingCell.col]
-    let newValue: any = editValue
+    let newValue: unknown = editValue
     
     // Try to preserve type
     if (typeof originalValue === 'number' && !isNaN(Number(editValue))) {

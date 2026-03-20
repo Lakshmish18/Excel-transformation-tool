@@ -520,7 +520,7 @@ After you run and go to results, you can go back to the pipeline to change opera
 
 /** Simple markdown-like renderer: headings, bold, code, lists. Content is static so safe to render. */
 function renderMarkdown(content: string): string {
-  let out = content
+  const out = content
     .trim()
     .replace(/^### (.*)$/gim, '<h3 class="text-lg font-semibold mb-2 mt-4">$1</h3>')
     .replace(/^## (.*)$/gim, '<h2 class="text-xl font-semibold mb-3 mt-6">$1</h2>')
