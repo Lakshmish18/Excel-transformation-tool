@@ -32,10 +32,18 @@ export function BatchProcessor({ files, onError, onSuccess }: BatchProcessorProp
   const [results, setResults] = useState<BatchTransformResponse | null>(null)
   const [aiSeedKey, setAiSeedKey] = useState(0)
 
-  // Get common sheet name (use first file's first sheet as default)
-  const commonSheets = files.length > 0 ? files[0].sheets : []
-  const defaultSheet = commonSheets[0] || ''
+  // Sheet dropdown options: union across all selected files.
+  // Note: batch processing uses a single `sheetName` for all files; files that
+  // don't contain that sheet will appear as per-file errors in the batch result.
+  const sheetOptions = files.length > 0 ? Array.from(new Set(files.flatMap((f) => f.sheets))) : []
+  const defaultSheet = sheetOptions[0] || ''
   const firstFile = files[0]
+
+  // If the user hasn't picked a sheet yet, default-select the first available option.
+  // This ensures the "Transformation Pipeline" section can render immediately.
+  useEffect(() => {
+    if (!sheetName && defaultSheet) setSheetName(defaultSheet)
+  }, [defaultSheet])
 
   // Load columns from first file when sheet is selected (for PipelineBuilder)
   useEffect(() => {
@@ -129,12 +137,12 @@ export function BatchProcessor({ files, onError, onSuccess }: BatchProcessorProp
         <CardContent className="space-y-4">
           <div>
             <Label htmlFor="sheet-name">Sheet Name (applies to all files)</Label>
-            <Select value={sheetName || defaultSheet} onValueChange={setSheetName}>
+            <Select value={sheetName} onValueChange={setSheetName}>
               <SelectTrigger id="sheet-name">
                 <SelectValue placeholder="Select sheet" />
               </SelectTrigger>
               <SelectContent>
-                {commonSheets.map((sheet) => (
+                {sheetOptions.map((sheet) => (
                   <SelectItem key={sheet} value={sheet}>
                     {sheet}
                   </SelectItem>

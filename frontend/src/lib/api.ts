@@ -494,7 +494,13 @@ export const excelApi = {
    * Batch transform multiple files
    */
   batchTransform: async (request: BatchTransformRequest): Promise<BatchTransformResponse> => {
-    const response = await api.post<BatchTransformResponse>('/batch-transform', request)
+    const response = await api.post<BatchTransformResponse>(
+      '/batch-transform',
+      request,
+      // Batch transforms can take longer than uploads (multiple files + Excel export).
+      // Bump timeout to avoid "Request timed out" for large datasets.
+      { timeout: 180000 }
+    )
     return response.data
   },
 
@@ -505,6 +511,8 @@ export const excelApi = {
     const response = await api.get(`/download-batch-zip`, {
       params: { zipId },
       responseType: 'blob',
+      // ZIP creation/download can exceed the 60s default for larger batches.
+      timeout: 180000,
     })
     return response.data as Blob
   },
