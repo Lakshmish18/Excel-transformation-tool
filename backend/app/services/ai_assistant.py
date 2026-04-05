@@ -8,13 +8,43 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
-from openai import OpenAI
+from openai import APIConnectionError, APITimeoutError, AuthenticationError, OpenAI, OpenAIError, RateLimitError
 
 logger = logging.getLogger(__name__)
 
 
 class OpenAIConfigError(RuntimeError):
     pass
+
+
+class OpenAIServiceError(RuntimeError):
+    """OpenAI call failed after configuration (network, auth, quota, etc.)."""
+
+
+def _normalize_openai_api_key() -> str:
+    """Strip whitespace/newlines — Vercel CLI often adds trailing newlines to env vars."""
+    raw = os.getenv("OPENAI_API_KEY") or ""
+    key = raw.strip().strip('"').strip("'")
+    key = key.replace("\r", "").replace("\n", "")
+    return key
+
+
+def _openai_failure_message(exc: Exception) -> str:
+    if isinstance(exc, AuthenticationError):
+        return (
+            "OpenAI rejected the API key. In Vercel, re-save OPENAI_API_KEY with no "
+            "extra spaces or line breaks, then redeploy."
+        )
+    if isinstance(exc, RateLimitError):
+        return "OpenAI rate limit reached. Wait a minute and try again."
+    if isinstance(exc, (APIConnectionError, APITimeoutError)):
+        return (
+            "Could not reach OpenAI (network/timeout). Check OPENAI_API_KEY, billing, "
+            "and try again in a moment."
+        )
+    if isinstance(exc, OpenAIError):
+        return f"OpenAI error: {exc}"
+    return str(exc)
 
 
 _VALID_FILTER_OPERATORS = {
@@ -198,11 +228,12 @@ class AIAssistant:
         if self._client is not None:
             return self._client
 
-        api_key = os.getenv("OPENAI_API_KEY")
+        api_key = _normalize_openai_api_key()
         if not api_key:
             raise OpenAIConfigError("OPENAI_API_KEY is not configured")
 
-        self._client = OpenAI(api_key=api_key)
+        # Longer timeout helps cold-start serverless (e.g. Vercel) + TLS handshakes.
+        self._client = OpenAI(api_key=api_key, timeout=120.0, max_retries=2)
         return self._client
 
     def _analysis_cache_key(self, df: pd.DataFrame, user_profile: str) -> str:
@@ -342,15 +373,15 @@ Respond with VALID JSON ONLY (no markdown, no commentary) in this exact shape:
             return result
         except OpenAIConfigError:
             raise
+        except json.JSONDecodeError as e:
+            logger.exception("AI analysis JSON parse failed")
+            raise OpenAIServiceError("AI returned invalid JSON. Try again.") from e
+        except OpenAIError as e:
+            logger.exception("AI analysis OpenAI API failed")
+            raise OpenAIServiceError(_openai_failure_message(e)) from e
         except Exception as e:
             logger.exception("AI analysis failed")
-            return {
-                "summary": f"Error analyzing data: {str(e)}",
-                "insights": [],
-                "data_quality_notes": [],
-                "recommended_actions": [],
-                "suggested_pipeline": [],
-            }
+            raise OpenAIServiceError(str(e)) from e
 
     def explain_insight(self, data_context: Dict[str, Any], insight_type: str) -> str:
         try:
@@ -379,9 +410,12 @@ Constraints:
             return (response.choices[0].message.content or "").strip()
         except OpenAIConfigError:
             raise
+        except OpenAIError as e:
+            logger.exception("AI explain failed")
+            raise OpenAIServiceError(_openai_failure_message(e)) from e
         except Exception as e:
             logger.exception("AI explain failed")
-            return f"Unable to explain: {str(e)}"
+            raise OpenAIServiceError(str(e)) from e
 
     def suggest_next_step(self, current_state: Dict[str, Any]) -> str:
         try:
@@ -408,9 +442,12 @@ Keep it under 50 words.
             return (response.choices[0].message.content or "").strip()
         except OpenAIConfigError:
             raise
+        except OpenAIError as e:
+            logger.exception("AI suggest failed")
+            raise OpenAIServiceError(_openai_failure_message(e)) from e
         except Exception as e:
             logger.exception("AI suggest failed")
-            return "Continue building your pipeline or run the transformation to see results."
+            raise OpenAIServiceError(str(e)) from e
 
     def chat(self, user_message: str, data_context: Dict[str, Any]) -> str:
         try:
@@ -438,9 +475,12 @@ Answer directly without preamble.
             return (response.choices[0].message.content or "").strip()
         except OpenAIConfigError:
             raise
+        except OpenAIError as e:
+            logger.exception("AI chat failed")
+            raise OpenAIServiceError(_openai_failure_message(e)) from e
         except Exception as e:
             logger.exception("AI chat failed")
-            return "I'm having trouble analyzing that right now. Can you rephrase your question?"
+            raise OpenAIServiceError(str(e)) from e
 
 
 # Singleton instance

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
@@ -10,7 +10,10 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Zap, Download, Loader2, AlertTriangle } from 'lucide-react'
-import { excelApi, getApiErrorDetail, type BatchTransformRequest, type BatchTransformResponse, type UploadResponse, type Operation } from '@/lib/api'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { excelApi, getApiErrorDetail, type BatchTransformRequest, type BatchTransformResponse, type BatchTransformResult, type UploadResponse, type Operation } from '@/lib/api'
+import { downloadBlob } from '@/lib/downloadHelpers'
+import { sheetsCommonToAllFiles } from '@/lib/batchSheets'
 import { PipelineBuilder } from '@/components/PipelineBuilder'
 import { useProfile } from '@/context/ProfileContext'
 import { AIAssistant } from '@/components/AIAssistant'
@@ -27,43 +30,56 @@ export function BatchProcessor({ files, onError, onSuccess }: BatchProcessorProp
   const [operations, setOperations] = useState<Operation[]>([])
   const [columns, setColumns] = useState<string[]>([])
   const [columnsLoading, setColumnsLoading] = useState(false)
+  const [columnLoadError, setColumnLoadError] = useState<string | null>(null)
   const [outputFormat, setOutputFormat] = useState<'individual' | 'zip'>('zip')
   const [isProcessing, setIsProcessing] = useState(false)
   const [results, setResults] = useState<BatchTransformResponse | null>(null)
   const [aiSeedKey, setAiSeedKey] = useState(0)
 
-  // Sheet dropdown options: union across all selected files.
-  // Note: batch processing uses a single `sheetName` for all files; files that
-  // don't contain that sheet will appear as per-file errors in the batch result.
-  const sheetOptions = files.length > 0 ? Array.from(new Set(files.flatMap((f) => f.sheets))) : []
-  const defaultSheet = sheetOptions[0] || ''
+  // Only sheets that exist in *every* file — otherwise preview uses file 1 and fails
+  // when the selected name exists only in another workbook.
+  const sheetOptions = useMemo(() => sheetsCommonToAllFiles(files), [files])
   const firstFile = files[0]
 
-  // If the user hasn't picked a sheet yet, default-select the first available option.
-  // This ensures the "Transformation Pipeline" section can render immediately.
+  // Keep selected sheet in sync with the common list.
   useEffect(() => {
-    if (!sheetName && defaultSheet) setSheetName(defaultSheet)
-  }, [defaultSheet])
+    if (sheetOptions.length === 0) {
+      setSheetName('')
+      return
+    }
+    setSheetName((prev) => (sheetOptions.includes(prev) ? prev : sheetOptions[0]))
+  }, [sheetOptions])
 
   // Load columns from first file when sheet is selected (for PipelineBuilder)
   useEffect(() => {
     if (!firstFile || !sheetName) {
       setColumns([])
+      setColumnLoadError(null)
       return
     }
     let cancelled = false
     setColumnsLoading(true)
-    excelApi.previewSheet(firstFile.fileId, sheetName, 5)
+    setColumnLoadError(null)
+    excelApi
+      .previewSheet(firstFile.fileId, sheetName, 5, { skipErrorToast: true })
       .then((res) => {
-        if (!cancelled && res.columns) setColumns(res.columns)
+        if (!cancelled && res.columns) {
+          setColumns(res.columns)
+          setColumnLoadError(null)
+        }
       })
-      .catch(() => {
-        if (!cancelled) setColumns([])
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setColumns([])
+          setColumnLoadError(getApiErrorDetail(err))
+        }
       })
       .finally(() => {
         if (!cancelled) setColumnsLoading(false)
       })
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+    }
   }, [firstFile?.fileId, sheetName])
 
   const handleBatchProcess = async () => {
@@ -104,19 +120,28 @@ export function BatchProcessor({ files, onError, onSuccess }: BatchProcessorProp
       if (results.zipId) {
         blob = await excelApi.downloadBatchZip(results.zipId)
       } else if (results.zipUrl) {
-        const response = await fetch(results.zipUrl)
+        const base = (import.meta.env.VITE_API_URL || '/api/v1').replace(/\/$/, '')
+        const path = results.zipUrl.startsWith('http')
+          ? results.zipUrl
+          : `${base}${results.zipUrl.startsWith('/') ? '' : '/'}${results.zipUrl}`
+        const response = await fetch(path)
+        if (!response.ok) throw new Error('ZIP download failed')
         blob = await response.blob()
       } else {
         throw new Error('No ZIP identifier available for download')
       }
-      const url = window.URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `batch_transformed_${Date.now()}.zip`
-      document.body.appendChild(a)
-      a.click()
-      window.URL.revokeObjectURL(url)
-      document.body.removeChild(a)
+      downloadBlob(blob, `batch_transformed_${Date.now()}.zip`)
+    } catch (error: unknown) {
+      onError?.(`Download failed: ${getApiErrorDetail(error)}`)
+    }
+  }
+
+  const handleDownloadOne = async (r: BatchTransformResult) => {
+    if (!r.transformedFileId) return
+    try {
+      const blob = await excelApi.downloadBatchOutput(r.transformedFileId)
+      const name = r.transformedFileName || `transformed_${r.fileName}`
+      downloadBlob(blob, name.endsWith('.xlsx') ? name : `${name}.xlsx`)
     } catch (error: unknown) {
       onError?.(`Download failed: ${getApiErrorDetail(error)}`)
     }
@@ -136,10 +161,14 @@ export function BatchProcessor({ files, onError, onSuccess }: BatchProcessorProp
         </CardHeader>
         <CardContent className="space-y-4">
           <div>
-            <Label htmlFor="sheet-name">Sheet Name (applies to all files)</Label>
-            <Select value={sheetName} onValueChange={setSheetName}>
+            <Label htmlFor="sheet-name">Sheet name (must exist in every file)</Label>
+            <Select
+              value={sheetName}
+              onValueChange={setSheetName}
+              disabled={sheetOptions.length === 0}
+            >
               <SelectTrigger id="sheet-name">
-                <SelectValue placeholder="Select sheet" />
+                <SelectValue placeholder={sheetOptions.length ? 'Select sheet' : 'No common sheets'} />
               </SelectTrigger>
               <SelectContent>
                 {sheetOptions.map((sheet) => (
@@ -149,6 +178,16 @@ export function BatchProcessor({ files, onError, onSuccess }: BatchProcessorProp
                 ))}
               </SelectContent>
             </Select>
+            {sheetOptions.length === 0 && (
+              <Alert variant="destructive" className="mt-3">
+                <AlertTriangle className="h-4 w-4" />
+                <AlertTitle>No matching sheets</AlertTitle>
+                <AlertDescription>
+                  Batch uses one sheet name for all files. These workbooks share no sheet with the same name.
+                  Rename a tab so every file has the same sheet name, or upload files with aligned structure.
+                </AlertDescription>
+              </Alert>
+            )}
           </div>
 
           <div>
@@ -167,7 +206,7 @@ export function BatchProcessor({ files, onError, onSuccess }: BatchProcessorProp
       </Card>
 
       {/* Pipeline Builder - same as single-file mode */}
-      {sheetName && firstFile && (
+      {sheetName && firstFile && sheetOptions.length > 0 && (
         <Card>
           <CardHeader>
             <CardTitle>Transformation Pipeline</CardTitle>
@@ -181,9 +220,15 @@ export function BatchProcessor({ files, onError, onSuccess }: BatchProcessorProp
                 <Loader2 className="h-4 w-4 animate-spin" />
                 Loading columns...
               </div>
+            ) : columnLoadError ? (
+              <Alert variant="destructive">
+                <AlertTriangle className="h-4 w-4" />
+                <AlertTitle>Could not load this sheet</AlertTitle>
+                <AlertDescription>{columnLoadError}</AlertDescription>
+              </Alert>
             ) : columns.length === 0 ? (
               <p className="text-sm text-muted-foreground">
-                Select a sheet and wait for columns to load, or the sheet may be empty.
+                No columns found for this sheet, or the sheet is empty.
               </p>
             ) : (
               <PipelineBuilder
@@ -206,7 +251,14 @@ export function BatchProcessor({ files, onError, onSuccess }: BatchProcessorProp
         <CardContent className="pt-6">
           <Button
             onClick={handleBatchProcess}
-            disabled={isProcessing || !sheetName || operations.length === 0}
+            disabled={
+              isProcessing ||
+              !sheetName ||
+              sheetOptions.length === 0 ||
+              !!columnLoadError ||
+              columns.length === 0 ||
+              operations.length === 0
+            }
             className="w-full"
             size="lg"
           >
@@ -231,10 +283,24 @@ export function BatchProcessor({ files, onError, onSuccess }: BatchProcessorProp
             <CardTitle>Batch Processing Complete</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="space-y-2">
+            <div className="space-y-3">
               {results.results.map((result, idx) => (
-                <div key={idx} className="text-sm p-2 bg-muted rounded">
-                  <strong>{result.fileName}</strong>: {result.rowCountBefore} → {result.rowCountAfter} rows
+                <div
+                  key={idx}
+                  className="flex flex-col gap-2 rounded-md border bg-muted/40 p-3 sm:flex-row sm:items-center sm:justify-between"
+                >
+                  <div>
+                    <strong>{result.fileName}</strong>
+                    <span className="text-muted-foreground">
+                      {' '}
+                      — {result.rowCountBefore} → {result.rowCountAfter} rows
+                    </span>
+                  </div>
+                  {result.transformedFileId && (
+                    <Button type="button" variant="outline" size="sm" onClick={() => handleDownloadOne(result)}>
+                      Download
+                    </Button>
+                  )}
                 </div>
               ))}
             </div>
@@ -259,17 +325,22 @@ export function BatchProcessor({ files, onError, onSuccess }: BatchProcessorProp
               </div>
             )}
 
-            {results.zipUrl && (
+            {(results.zipId || results.zipUrl) && (
               <Button onClick={handleDownloadZip} className="w-full">
                 <Download className="h-4 w-4 mr-2" />
-                Download ZIP File
+                Download ZIP file
               </Button>
             )}
           </CardContent>
         </Card>
       )}
 
-      {config.features.showAutoAnalysis && config.features.showBatchProcessing && firstFile && sheetName && (
+      {config.features.showAutoAnalysis &&
+        config.features.showBatchProcessing &&
+        firstFile &&
+        sheetName &&
+        columns.length > 0 &&
+        !columnLoadError && (
         <AIAssistant
           fileId={firstFile.fileId}
           sheetName={sheetName}

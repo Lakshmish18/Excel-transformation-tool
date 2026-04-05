@@ -43,11 +43,5 @@ __pycache__/
 *.log
 npm-debug.log*
 
-# Docs not in repo (README.md and backend/README.md, frontend/README.md are kept)
+# Local editor metadata
 .cursor/
-DEPLOY.md
-GITHUB_PUSH.md
-QUICK_TEST.md
-SUPABASE_INTEGRATION_SUMMARY.md
-SUPABASE_SETUP.md
-backend/TESTING.md

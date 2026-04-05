@@ -4,6 +4,13 @@
 import axios from 'axios'
 import { toast } from 'sonner'
 
+/** Opt out of global error toasts when the caller handles errors (e.g. batch/AI panels). */
+declare module 'axios' {
+  export interface AxiosRequestConfig {
+    skipErrorToast?: boolean
+  }
+}
+
 // Production: set VITE_API_URL (no trailing slash). Local: uses proxy /api/v1
 const API_BASE_URL = (import.meta.env.VITE_API_URL || '/api/v1').replace(/\/$/, '')
 
@@ -130,8 +137,10 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     const friendly = parseError(error)
-    const message = typeof friendly.message === 'string' ? friendly.message : toDisplayString(friendly.message)
-    toast.error(message)
+    if (!error.config?.skipErrorToast) {
+      const message = typeof friendly.message === 'string' ? friendly.message : toDisplayString(friendly.message)
+      toast.error(message)
+    }
     return Promise.reject(friendly)
   }
 )
@@ -257,6 +266,8 @@ export interface BatchTransformResult {
   fileName: string
   transformedFileId?: string
   transformedFileName?: string
+  /** Sheet names in the transformed workbook (individual output mode). */
+  transformedSheets?: string[]
   rowCountBefore: number
   rowCountAfter: number
 }
@@ -402,18 +413,17 @@ export const excelApi = {
   previewSheet: async (
     fileId: string,
     sheetName: string,
-    limit: number = 10
+    limit: number = 10,
+    options?: { skipErrorToast?: boolean }
   ): Promise<PreviewResponse> => {
-    const response = await api.get<PreviewResponse>(
-      '/preview-sheet',
-      {
-        params: {
-          fileId: fileId,
-          sheetName: sheetName,
-          limit: limit,
-        },
-      }
-    )
+    const response = await api.get<PreviewResponse>('/preview-sheet', {
+      params: {
+        fileId: fileId,
+        sheetName: sheetName,
+        limit: limit,
+      },
+      skipErrorToast: options?.skipErrorToast,
+    })
     return response.data
   },
 
@@ -486,7 +496,10 @@ export const excelApi = {
    * Merge multiple files
    */
   mergeFiles: async (request: MergeFilesRequest): Promise<MergeFilesResponse> => {
-    const response = await api.post<MergeFilesResponse>('/merge-files', request)
+    const response = await api.post<MergeFilesResponse>('/merge-files', request, {
+      // Merge loads multiple workbooks and can exceed the default 60s client timeout.
+      timeout: 180000,
+    })
     return response.data
   },
 
@@ -513,6 +526,18 @@ export const excelApi = {
       responseType: 'blob',
       // ZIP creation/download can exceed the 60s default for larger batches.
       timeout: 180000,
+    })
+    return response.data as Blob
+  },
+
+  /**
+   * Download one transformed file from batch processing (individual output mode).
+   */
+  downloadBatchOutput: async (outputId: string): Promise<Blob> => {
+    const response = await api.get(`/download-batch-output`, {
+      params: { outputId },
+      responseType: 'blob',
+      timeout: 120000,
     })
     return response.data as Blob
   },
@@ -554,23 +579,40 @@ export const excelApi = {
 }
 
 export const aiApi = {
-  analyzeData: async (request: AIAnalyzeDataRequest): Promise<AIAnalyzeDataResponse> => {
-    const response = await api.post<AIAnalyzeDataResponse>('/ai/analyze-data', request)
+  analyzeData: async (
+    request: AIAnalyzeDataRequest,
+    options?: { skipErrorToast?: boolean }
+  ): Promise<AIAnalyzeDataResponse> => {
+    const response = await api.post<AIAnalyzeDataResponse>('/ai/analyze-data', request, {
+      skipErrorToast: options?.skipErrorToast,
+    })
     return response.data
   },
 
-  chat: async (request: AIChatRequest): Promise<AIChatResponse> => {
-    const response = await api.post<AIChatResponse>('/ai/chat', request)
+  chat: async (request: AIChatRequest, options?: { skipErrorToast?: boolean }): Promise<AIChatResponse> => {
+    const response = await api.post<AIChatResponse>('/ai/chat', request, {
+      skipErrorToast: options?.skipErrorToast,
+    })
     return response.data
   },
 
-  explainInsight: async (request: AIExplainRequest): Promise<AIExplainResponse> => {
-    const response = await api.post<AIExplainResponse>('/ai/explain-insight', request)
+  explainInsight: async (
+    request: AIExplainRequest,
+    options?: { skipErrorToast?: boolean }
+  ): Promise<AIExplainResponse> => {
+    const response = await api.post<AIExplainResponse>('/ai/explain-insight', request, {
+      skipErrorToast: options?.skipErrorToast,
+    })
     return response.data
   },
 
-  suggestNextStep: async (request: AISuggestNextStepRequest): Promise<AISuggestNextStepResponse> => {
-    const response = await api.post<AISuggestNextStepResponse>('/ai/suggest-next-step', request)
+  suggestNextStep: async (
+    request: AISuggestNextStepRequest,
+    options?: { skipErrorToast?: boolean }
+  ): Promise<AISuggestNextStepResponse> => {
+    const response = await api.post<AISuggestNextStepResponse>('/ai/suggest-next-step', request, {
+      skipErrorToast: options?.skipErrorToast,
+    })
     return response.data
   },
 }

@@ -4,6 +4,16 @@ A full-stack web application that lets you **upload Excel files**, **preview dat
 
 **Repository:** [https://github.com/Lakshmish18/Excel-transformation-tool](https://github.com/Lakshmish18/Excel-transformation-tool)
 
+### Documentation
+
+| Document | Description |
+|----------|-------------|
+| **[PROJECT_BRIEFING.md](PROJECT_BRIEFING.md)** | Full project briefing: stack, deployment options, doc index |
+| **[USER_MANUAL.md](USER_MANUAL.md)** | End-user guide (workflows, operations, troubleshooting) |
+| **[WORKFLOW_AND_ARCHITECTURE.md](WORKFLOW_AND_ARCHITECTURE.md)** | Technical architecture and data flow |
+| **[DEPLOYMENT.md](DEPLOYMENT.md)** | Deploy frontend (Vercel) and backend (Railway or Vercel) |
+| **[SUPABASE_SETUP.md](SUPABASE_SETUP.md)** | Optional Supabase (auth, history, storage) |
+
 ---
 
 ## Features
@@ -149,8 +159,9 @@ The app runs without any `.env` file. Optional configuration:
 |----------|--------|---------|
 | `VITE_SUPABASE_URL` | frontend `.env` | Supabase project URL (auth, cloud pipelines, history) |
 | `VITE_SUPABASE_ANON_KEY` | frontend `.env` | Supabase anon/public key |
-| `VITE_API_URL` | frontend (production) | Backend API URL when deploying (e.g. Vercel) |
-| `ALLOWED_ORIGINS` | backend (production) | CORS allowed origins when deploying (e.g. Render) |
+| `VITE_API_URL` | frontend (production) | Backend API base including `/api/v1`, e.g. `https://your-api.vercel.app/api/v1` |
+| `ALLOWED_ORIGINS` | backend (production) | Comma-separated frontend origins (e.g. Vercel URL), no spaces |
+| `OPENAI_API_KEY` | backend (optional) | Enables AI assistant endpoints |
 
 Copy `frontend/.env.example` to `frontend/.env` and fill in Supabase values if you use cloud features. For local dev, the frontend uses `/api/v1` with a proxy to `localhost:8000`.
 
@@ -182,8 +193,13 @@ Excel-transformation-tool/
 │   └── vercel.json          # SPA rewrites for deploy
 ├── scripts/
 │   ├── start-backend.js     # Used by npm start
-│   └── run-browser.ps1       # Windows: start both + open browser
-├── DEPLOYMENT.md            # Deploy to Vercel + Railway
+│   ├── run-browser.ps1      # Windows: start both + open browser
+│   └── generate_demo_files.py # Optional demo workbook generation
+├── PROJECT_BRIEFING.md      # Full project briefing
+├── USER_MANUAL.md           # End-user manual
+├── WORKFLOW_AND_ARCHITECTURE.md
+├── DEPLOYMENT.md            # Deploy to Vercel + Railway (backend can use Vercel too)
+├── SUPABASE_SETUP.md        # Optional Supabase
 └── README.md                # This file
 ```
 
@@ -210,12 +226,7 @@ Interactive API docs when backend is running: **http://localhost:8000/docs**
 
 ## Deployment
 
-To deploy the app (frontend on Vercel, backend on Railway), follow **[DEPLOYMENT.md](DEPLOYMENT.md)**. It covers:
-
-1. Deploying the backend on Railway  
-2. Deploying the frontend on Vercel  
-3. Setting CORS (`ALLOWED_ORIGINS`) and optional Supabase redirect URLs  
-4. Verifying the live app  
+Follow **[DEPLOYMENT.md](DEPLOYMENT.md)** for production setup (frontend on **Vercel**, backend on **Railway** or **Vercel** using `backend/vercel.json`). After you connect GitHub to Vercel (and Railway if used), **pushing to `main` redeploys** the linked projects automatically—no separate upload step unless you disabled auto-deploy.
 
 ---
 

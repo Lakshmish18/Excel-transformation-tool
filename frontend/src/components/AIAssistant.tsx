@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
@@ -39,6 +40,8 @@ export function AIAssistant({
   const [input, setInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [previewContext, setPreviewContext] = useState<{ columns: string[]; rows: Record<string, unknown>[] } | null>(null)
+  const [previewLoadError, setPreviewLoadError] = useState<string | null>(null)
+  const [analysisLoadError, setAnalysisLoadError] = useState<string | null>(null)
 
   const lastAnalyzeKeyRef = useRef<string | null>(null)
   const scrollAnchorRef = useRef<HTMLDivElement>(null)
@@ -54,18 +57,21 @@ export function AIAssistant({
     let cancelled = false
 
     // Load a small preview context for chat/explanations.
+    setPreviewLoadError(null)
     excelApi
-      .previewSheet(fileId, sheetName, 10)
+      .previewSheet(fileId, sheetName, 10, { skipErrorToast: true })
       .then((res) => {
         if (cancelled) return
         setPreviewContext({
           columns: res.columns,
           rows: res.rows,
         })
+        setPreviewLoadError(null)
       })
       .catch((err: unknown) => {
         if (cancelled) return
-        toast.error(getApiErrorDetail(err))
+        setPreviewContext(null)
+        setPreviewLoadError(getApiErrorDetail(err))
       })
 
     return () => {
@@ -82,10 +88,12 @@ export function AIAssistant({
     setMessages([])
 
     setIsLoading(true)
+    setAnalysisLoadError(null)
     aiApi
-      .analyzeData({ fileId, sheetName, userProfile })
+      .analyzeData({ fileId, sheetName, userProfile }, { skipErrorToast: true })
       .then((res) => {
         setAnalysis(res.analysis)
+        setAnalysisLoadError(null)
         setMessages([
           {
             role: 'assistant',
@@ -95,7 +103,8 @@ export function AIAssistant({
         ])
       })
       .catch((err: unknown) => {
-        toast.error(getApiErrorDetail(err))
+        setAnalysis(null)
+        setAnalysisLoadError(getApiErrorDetail(err))
       })
       .finally(() => {
         setIsLoading(false)
@@ -118,16 +127,19 @@ export function AIAssistant({
     setIsLoading(true)
 
     try {
-      const res = await aiApi.chat({
-        message: userText,
-        dataContext: {
-          fileId,
-          sheetName,
-          ...previewContext,
-          profile: userProfile,
-          aiAnalysisSummary: analysis?.summary,
+      const res = await aiApi.chat(
+        {
+          message: userText,
+          dataContext: {
+            fileId,
+            sheetName,
+            ...previewContext,
+            profile: userProfile,
+            aiAnalysisSummary: analysis?.summary,
+          },
         },
-      })
+        { skipErrorToast: true }
+      )
       const aiMessage: Message = { role: 'assistant', content: res.response, timestamp: new Date() }
       setMessages((prev) => [...prev, aiMessage])
     } catch (err: unknown) {
@@ -171,6 +183,22 @@ export function AIAssistant({
 
         {isOpen && (
           <CardContent className="p-0">
+            {(previewLoadError || analysisLoadError) && (
+              <div className="p-3 border-b space-y-2">
+                {previewLoadError && (
+                  <Alert variant="destructive">
+                    <AlertTitle className="text-sm">Preview unavailable</AlertTitle>
+                    <AlertDescription className="text-xs">{previewLoadError}</AlertDescription>
+                  </Alert>
+                )}
+                {analysisLoadError && (
+                  <Alert variant="destructive">
+                    <AlertTitle className="text-sm">AI analysis unavailable</AlertTitle>
+                    <AlertDescription className="text-xs">{analysisLoadError}</AlertDescription>
+                  </Alert>
+                )}
+              </div>
+            )}
             {/* Insights + apply */}
             {analysis && (
               <div className="p-4 bg-emerald-50 border-b space-y-3">

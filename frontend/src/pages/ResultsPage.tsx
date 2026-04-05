@@ -12,7 +12,7 @@ import { AutoKPIs } from '@/components/AutoKPIs'
 import { ColumnProfiler } from '@/components/ColumnProfiler'
 import { SkeletonTable } from '@/components/skeletons'
 import { useApp } from '@/context/AppContext'
-import { excelApi, getApiErrorDetail } from '@/lib/api'
+import { excelApi } from '@/lib/api'
 import { Download, RotateCcw, Edit, Loader2 } from 'lucide-react'
 import {
   Select,

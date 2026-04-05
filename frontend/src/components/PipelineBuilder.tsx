@@ -105,6 +105,8 @@ export function PipelineBuilder({
   const { profile, config } = useProfile()
 
   const [editingIndex, setEditingIndex] = useState<number | null>(null)
+  /** Keyboard-selected operation row (Delete / E / Ctrl+arrows). */
+  const [keyboardFocusIndex, setKeyboardFocusIndex] = useState<number | null>(null)
   const [isValidating, setIsValidating] = useState(false)
   const [isRunning, setIsRunning] = useState(false)
   const [validationResult, setValidationResult] = useState<ValidatePipelineResponse | null>(null)
@@ -394,33 +396,17 @@ export function PipelineBuilder({
     enabled: operations.length > 0,
   })
 
-  // Keyboard shortcuts
+  // Keep keyboard selection in range when pipeline length changes
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement
-      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) return
-      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key === 'z') {
-        e.preventDefault()
-        if (historyState.past.length > 0) {
-          dispatch({ type: 'UNDO' })
-          toast.success(`Undone: ${historyState.past[historyState.past.length - 1].label}`)
-        }
-      }
-      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'Z') {
-        e.preventDefault()
-        if (historyState.future.length > 0) {
-          dispatch({ type: 'REDO' })
-          toast.success(`Redone: ${historyState.future[0].label}`)
-        }
-      }
-      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
-        e.preventDefault()
-        if (operations.length > 0) setSaveDialogOpen(true)
-      }
+    if (operations.length === 0) {
+      setKeyboardFocusIndex(null)
+      return
     }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [historyState.past.length, historyState.future.length, operations.length])
+    setKeyboardFocusIndex((i) => {
+      if (i === null) return operations.length - 1
+      return Math.min(i, operations.length - 1)
+    })
+  }, [operations.length])
 
   const handleLoadPipeline = useCallback((ops: Operation[]) => {
     const pipelineOps = opsToPipelineOps(ops, generateSummary)
@@ -581,6 +567,106 @@ export function PipelineBuilder({
       setIsRunning(false)
     }
   }
+
+  const handleRunRef = useRef(handleRun)
+  handleRunRef.current = handleRun
+  const handleValidateRef = useRef(handleValidate)
+  handleValidateRef.current = handleValidate
+  const moveUpRef = useRef(moveUp)
+  moveUpRef.current = moveUp
+  const moveDownRef = useRef(moveDown)
+  moveDownRef.current = moveDown
+  const deleteOpRef = useRef(deleteOperation)
+  deleteOpRef.current = deleteOperation
+  const startEditRef = useRef(startEdit)
+  startEditRef.current = startEdit
+  const keyboardFocusRef = useRef<number | null>(null)
+  keyboardFocusRef.current = keyboardFocusIndex
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) return
+
+      const mod = e.ctrlKey || e.metaKey
+      const idx = keyboardFocusRef.current
+      const opLen = operations.length
+
+      if (mod && !e.shiftKey && (e.key === 'z' || e.key === 'Z')) {
+        e.preventDefault()
+        if (historyState.past.length > 0) {
+          const label = historyState.past[historyState.past.length - 1].label
+          dispatch({ type: 'UNDO' })
+          toast.success(`Undone: ${label}`)
+        }
+        return
+      }
+      if (mod && e.shiftKey && (e.key === 'z' || e.key === 'Z')) {
+        e.preventDefault()
+        if (historyState.future.length > 0) {
+          const label = historyState.future[0].label
+          dispatch({ type: 'REDO' })
+          toast.success(`Redone: ${label}`)
+        }
+        return
+      }
+      // Windows-style redo (Ctrl+Y); Mac users typically use Ctrl+Shift+Z / Cmd+Shift+Z
+      if (mod && !e.shiftKey && (e.key === 'y' || e.key === 'Y')) {
+        e.preventDefault()
+        if (historyState.future.length > 0) {
+          const label = historyState.future[0].label
+          dispatch({ type: 'REDO' })
+          toast.success(`Redone: ${label}`)
+        }
+        return
+      }
+      if (mod && (e.key === 's' || e.key === 'S')) {
+        e.preventDefault()
+        if (opLen > 0) setSaveDialogOpen(true)
+        return
+      }
+      // Ctrl+Shift+V = validate (avoids stealing Ctrl+V paste)
+      if (mod && e.shiftKey && (e.key === 'V' || e.key === 'v')) {
+        e.preventDefault()
+        void handleValidateRef.current()
+        return
+      }
+      if (mod && e.key === 'Enter') {
+        e.preventDefault()
+        if (!batchMode) void handleRunRef.current()
+        return
+      }
+      if (e.key === 'Delete') {
+        if (idx !== null && idx >= 0 && opLen > 0) {
+          e.preventDefault()
+          deleteOpRef.current(idx)
+        }
+        return
+      }
+      if (mod && e.key === 'ArrowUp') {
+        if (idx !== null && idx > 0) {
+          e.preventDefault()
+          moveUpRef.current(idx)
+        }
+        return
+      }
+      if (mod && e.key === 'ArrowDown') {
+        if (idx !== null && idx < opLen - 1) {
+          e.preventDefault()
+          moveDownRef.current(idx)
+        }
+        return
+      }
+      if (!mod && !e.altKey && (e.key === 'e' || e.key === 'E')) {
+        if (idx !== null && idx >= 0) {
+          e.preventDefault()
+          startEditRef.current(idx)
+        }
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [historyState, batchMode, operations.length, dispatch])
 
   const handleConfigOpenChange = (open: boolean) => {
     setConfigDialogOpen(open)
@@ -774,8 +860,10 @@ export function PipelineBuilder({
                       <Card
                         key={op.id}
                         ref={isFirstError ? firstErrorCardRef : null}
+                        onClick={() => setKeyboardFocusIndex(index)}
                         className={cn(
-                          'relative transition-colors',
+                          'relative transition-colors outline-none',
+                          keyboardFocusIndex === index && 'ring-2 ring-primary ring-offset-2',
                           status === 'error' && 'border-red-500 bg-red-50/50 dark:bg-red-950/20',
                           status === 'warning' && 'border-amber-500 bg-amber-50/50 dark:bg-amber-950/20',
                           status === 'valid' && 'border-green-500/50'

@@ -29,13 +29,18 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Create uploads directory if it doesn't exist
-uploads_dir = Path("uploads")
-uploads_dir.mkdir(exist_ok=True)
+# Storage paths for uploads/outputs.
+# On Vercel, write to /tmp because source filesystem is read-only.
+if os.getenv("VERCEL"):
+    storage_root = Path(os.getenv("APP_STORAGE_DIR", "/tmp/excel_tool"))
+else:
+    storage_root = Path(".")
 
-# Create outputs directory if it doesn't exist
-outputs_dir = Path("outputs")
-outputs_dir.mkdir(exist_ok=True)
+uploads_dir = storage_root / "uploads"
+uploads_dir.mkdir(parents=True, exist_ok=True)
+
+outputs_dir = storage_root / "outputs"
+outputs_dir.mkdir(parents=True, exist_ok=True)
 
 # Run periodic cleanup every hour (seconds)
 CLEANUP_INTERVAL_SECONDS = 3600

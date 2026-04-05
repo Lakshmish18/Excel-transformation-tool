@@ -17,18 +17,28 @@ import openpyxl
 
 from app.utils.excel_loader import load_file_with_header_detection
 from app.utils.data_quality import calculate_data_quality_score
+from app.utils.supabase_uploads import (
+    is_remote_storage_configured,
+    try_hydrate_upload_from_remote,
+    upload_session_file,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# Directory to store uploaded files
-UPLOAD_DIR = Path("uploads")
-UPLOAD_DIR.mkdir(exist_ok=True)
+# Directory to store uploaded/transformed files.
+# Vercel's deployment filesystem is read-only, so use /tmp in serverless runtime.
+if os.getenv("VERCEL"):
+    _storage_root = Path(os.getenv("APP_STORAGE_DIR", "/tmp/excel_tool"))
+else:
+    _storage_root = Path(".")
 
-# Directory to store transformed files
-OUTPUT_DIR = Path("outputs")
-OUTPUT_DIR.mkdir(exist_ok=True)
+UPLOAD_DIR = _storage_root / "uploads"
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+OUTPUT_DIR = _storage_root / "outputs"
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # In-memory storage for file metadata (fileId -> file info)
 file_storage: Dict[str, Dict[str, Any]] = {}
@@ -226,10 +236,40 @@ def _get_file_info(file_id: str) -> Dict[str, Any]:
                     detail=f"Error reading file from disk: {str(e)}"
                 )
     
-    # File not found
+    # Serverless: upload may have hit another instance; hydrate from Supabase if configured.
+    hydrated = try_hydrate_upload_from_remote(file_id, UPLOAD_DIR)
+    if hydrated:
+        file_path, filename, ext = hydrated
+        try:
+            sheet_names = ['Sheet1'] if ext == '.csv' else _get_sheet_names_fast(file_path)
+            file_info = {
+                "file_id": file_id,
+                "filename": filename,
+                "file_path": str(file_path),
+                "sheets": sheet_names,
+            }
+            file_storage[file_id] = file_info
+            return file_info
+        except Exception as e:
+            logger.error(f"Error hydrating file {file_id} from remote: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error reading file after remote fetch: {str(e)}",
+            )
+
+    if os.getenv("VERCEL") and not is_remote_storage_configured():
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "File not available on this server instance. For Vercel, set SUPABASE_URL and "
+                "SUPABASE_SERVICE_ROLE_KEY on the backend and create a Storage bucket named "
+                f"'excel-uploads' so uploads can be shared across instances."
+            ),
+        )
+
     raise HTTPException(
         status_code=404,
-        detail=f"File with ID '{file_id}' not found. Please upload the file first."
+        detail=f"File with ID '{file_id}' not found. Please upload the file first.",
     )
 
 
@@ -283,7 +323,21 @@ async def _process_single_file(file: UploadFile) -> Dict[str, Any]:
             "file_path": str(file_path),
             "sheets": sheet_names,
         }
-        
+
+        try:
+            upload_session_file(file_id, file.filename, detected_ext, file_content)
+        except Exception as e:
+            if os.getenv("VERCEL"):
+                logger.error("Remote upload required on Vercel but failed: %s", e)
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        "Could not persist upload for serverless. Check Supabase Storage bucket "
+                        "'excel-uploads' and SUPABASE_SERVICE_ROLE_KEY."
+                    ),
+                ) from e
+            logger.warning("Optional Supabase backup upload failed: %s", e)
+
         return {
             "fileId": file_id,
             "fileName": file.filename,

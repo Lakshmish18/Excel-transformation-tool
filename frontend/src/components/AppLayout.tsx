@@ -12,6 +12,7 @@ import { Toaster } from 'sonner'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { GuidedTour, getTourCompleted, setTourCompleted } from '@/components/GuidedTour'
 import { KeyboardShortcuts } from '@/components/KeyboardShortcuts'
+import { CommandPalette } from '@/components/CommandPalette'
 import { Auth } from '@/components/Auth'
 import { restartProductTour } from '@/components/ProductTour'
 import { useProfile } from '@/context/ProfileContext'
@@ -71,6 +72,7 @@ export function AppLayout() {
   const currentStep = getCurrentStep(pathname)
 
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const [tourRun, setTourRun] = useState(false)
   const { config, showProfileSelector } = useProfile()
 
@@ -83,6 +85,11 @@ export function AppLayout() {
   }
 
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {
+      e.preventDefault()
+      setCommandPaletteOpen((o) => !o)
+      return
+    }
     if (e.key === '?' && !e.ctrlKey && !e.metaKey && !e.altKey) {
       const target = e.target as HTMLElement
       if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return
@@ -109,6 +116,11 @@ export function AppLayout() {
         <GuidedTour run={tourRun} onComplete={() => setTourRun(false)} />
       </ErrorBoundary>
       <KeyboardShortcuts open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
+      <CommandPalette
+        open={commandPaletteOpen}
+        onOpenChange={setCommandPaletteOpen}
+        onOpenShortcuts={() => setShortcutsOpen(true)}
+      />
       {/* Header */}
       <header className="bg-[#217346] text-white shadow-sm">
         <div className="px-6 py-3">

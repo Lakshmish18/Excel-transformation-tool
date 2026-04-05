@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from app.api.v1.excel import _get_file_info
-from app.services.ai_assistant import OpenAIConfigError, ai_assistant
+from app.services.ai_assistant import OpenAIConfigError, OpenAIServiceError, ai_assistant
 from app.utils.excel_loader import load_file_with_header_detection
 
 logger = logging.getLogger(__name__)
@@ -73,6 +73,8 @@ async def analyze_data(request: AnalyzeRequest) -> Dict[str, Any]:
             analysis = ai_assistant.analyze_data(df, request.userProfile)
         except OpenAIConfigError as e:
             raise HTTPException(status_code=503, detail=str(e))
+        except OpenAIServiceError as e:
+            raise HTTPException(status_code=503, detail=str(e))
 
         return {"success": True, "analysis": analysis}
     except HTTPException:
@@ -90,6 +92,8 @@ async def chat_with_ai(request: ChatRequest) -> Dict[str, Any]:
             response = ai_assistant.chat(request.message, request.dataContext)
         except OpenAIConfigError as e:
             raise HTTPException(status_code=503, detail=str(e))
+        except OpenAIServiceError as e:
+            raise HTTPException(status_code=503, detail=str(e))
 
         return {"success": True, "response": response}
     except HTTPException:
@@ -106,6 +110,8 @@ async def explain_insight(request: ExplainRequest) -> Dict[str, Any]:
         try:
             explanation = ai_assistant.explain_insight(request.dataContext, request.insightType)
         except OpenAIConfigError as e:
+            raise HTTPException(status_code=503, detail=str(e))
+        except OpenAIServiceError as e:
             raise HTTPException(status_code=503, detail=str(e))
 
         return {"success": True, "explanation": explanation}
@@ -130,6 +136,8 @@ async def suggest_next_step(request: NextStepRequest) -> Dict[str, Any]:
                 }
             )
         except OpenAIConfigError as e:
+            raise HTTPException(status_code=503, detail=str(e))
+        except OpenAIServiceError as e:
             raise HTTPException(status_code=503, detail=str(e))
 
         return {"success": True, "suggestion": suggestion}

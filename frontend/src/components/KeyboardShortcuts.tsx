@@ -22,22 +22,23 @@ const SHORTCUTS: ShortcutSection[] = [
   {
     title: 'Global',
     items: [
-      { keys: ['Ctrl', 'K'], description: 'Open command palette' },
-      { keys: ['Ctrl', 'Z'], description: 'Undo last operation' },
-      { keys: ['Ctrl', 'Shift', 'Z'], description: 'Redo operation' },
+      { keys: ['Ctrl', 'K'], description: 'Open quick actions (navigation, shortcuts)' },
+      { keys: ['Ctrl', 'Z'], description: 'Undo last pipeline change' },
+      { keys: ['Ctrl', 'Shift', 'Z'], description: 'Redo pipeline change' },
+      { keys: ['Ctrl', 'Y'], description: 'Redo (Windows-style)' },
       { keys: ['Ctrl', 'S'], description: 'Save pipeline' },
-      { keys: ['Esc'], description: 'Close dialogs' },
+      { keys: ['Esc'], description: 'Close dialogs (when focused)' },
     ],
   },
   {
     title: 'Pipeline',
     items: [
-      { keys: ['Ctrl', 'Enter'], description: 'Run & preview' },
-      { keys: ['Ctrl', 'V'], description: 'Validate pipeline' },
-      { keys: ['Delete'], description: 'Delete selected operation' },
-      { keys: ['Ctrl', '↑'], description: 'Move operation up' },
-      { keys: ['Ctrl', '↓'], description: 'Move operation down' },
-      { keys: ['E'], description: 'Edit selected operation' },
+      { keys: ['Ctrl', 'Enter'], description: 'Run & preview (not in batch mode)' },
+      { keys: ['Ctrl', 'Shift', 'V'], description: 'Validate pipeline' },
+      { keys: ['Delete'], description: 'Delete focused operation' },
+      { keys: ['Ctrl', '↑'], description: 'Move focused operation up' },
+      { keys: ['Ctrl', '↓'], description: 'Move focused operation down' },
+      { keys: ['E'], description: 'Edit focused step (letter E only, not Ctrl+E)' },
     ],
   },
 ]
@@ -61,8 +62,14 @@ export function KeyboardShortcuts({ open, onOpenChange }: KeyboardShortcutsProps
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Keyboard Shortcuts</DialogTitle>
-          <DialogDescription>
-            Press <Kbd>?</Kbd> to toggle this dialog.
+          <DialogDescription className="space-y-2">
+            <p>
+              Press <Kbd>?</Kbd> (question mark) to toggle this dialog. On Mac, use <Kbd>⌘</Kbd> where you see{' '}
+              <Kbd>Ctrl</Kbd>.
+            </p>
+            <p className="text-xs text-muted-foreground">
+              <strong className="font-medium text-foreground">Delete</strong> and <strong className="font-medium text-foreground">E</strong> are single keys (no Ctrl/Cmd)—click a pipeline step first so it is focused, and don’t use them while typing in a field.
+            </p>
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-6 py-2">
@@ -91,7 +98,7 @@ export function KeyboardShortcuts({ open, onOpenChange }: KeyboardShortcutsProps
           ))}
         </div>
         <p className="border-t border-border pt-3 text-center text-xs text-muted-foreground">
-          Press ? to toggle this dialog
+          <Kbd>?</Kbd> toggles this dialog · <Kbd>E</Kbd> edits the focused pipeline step
         </p>
       </DialogContent>
     </Dialog>

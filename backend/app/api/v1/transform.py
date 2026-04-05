@@ -668,12 +668,23 @@ async def batch_transform(request: Request, payload: BatchTransformRequest) -> B
                 output_path = OUTPUT_DIR / output_filename
                 
                 df_transformed.to_excel(output_path, index=False, engine='openpyxl')
-                
+
+                wb_out = openpyxl.load_workbook(output_path, read_only=True)
+                out_sheet_names = wb_out.sheetnames
+                wb_out.close()
+                file_storage[output_id] = {
+                    "file_id": output_id,
+                    "filename": f"transformed_{file_info['filename']}",
+                    "file_path": str(output_path),
+                    "sheets": out_sheet_names,
+                }
+
                 results.append({
                     "fileId": file_id,
                     "fileName": file_info["filename"],
                     "transformedFileId": output_id,
                     "transformedFileName": f"transformed_{file_info['filename']}",
+                    "transformedSheets": out_sheet_names,
                     "rowCountBefore": row_count_before,
                     "rowCountAfter": row_count_after,
                 })
@@ -719,7 +730,7 @@ async def batch_transform(request: Request, payload: BatchTransformRequest) -> B
                         # Clean up temp file
                         temp_file.unlink()
             
-            # Store relative API path so clients using axios baseURL can resolve correctly.
+            # Path relative to /api/v1 (axios baseURL) for clients that fetch by URL.
             zip_url = f"/download-batch-zip?zipId={zip_id}"
             
         except Exception as e:
@@ -736,14 +747,33 @@ async def batch_transform(request: Request, payload: BatchTransformRequest) -> B
     )
     
     if errors:
-        # Include errors in response but don't fail
+        # Include errors in response but don't fail (keep zipId so clients can still download ZIP).
         return BatchTransformResponse(
             results=response.results,
             zipUrl=response.zipUrl,
+            zipId=response.zipId,
             errors=errors,
         )
 
     return response
+
+
+@router.get("/download-batch-output")
+async def download_batch_output(outputId: str = Query(..., description="Output file ID from batch individual mode")) -> FileResponse:
+    """Download one transformed workbook from batch processing (individual output format)."""
+    path = OUTPUT_DIR / f"transformed_{outputId}.xlsx"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Transformed file not found or expired")
+    try:
+        info = _get_file_info(outputId)
+        filename = info.get("filename", f"transformed_{outputId}.xlsx")
+    except HTTPException:
+        filename = f"transformed_{outputId}.xlsx"
+    return FileResponse(
+        path=path,
+        filename=filename,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
 
 
 @router.get("/download-batch-zip")
